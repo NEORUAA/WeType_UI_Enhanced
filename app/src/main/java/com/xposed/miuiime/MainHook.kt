@@ -13,20 +13,17 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.graphics.Typeface
+import android.os.Build
 import android.util.TypedValue
+import android.view.RoundedCorner
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.view.Window
+import android.view.WindowInsets
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
-import androidx.compose.foundation.shape.CornerSize
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Outline as ComposeOutline
-import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.Log
 import com.github.kyuubiran.ezxhelper.utils.findMethod
@@ -41,9 +38,6 @@ import com.github.kyuubiran.ezxhelper.utils.invokeStaticMethodAuto
 import com.github.kyuubiran.ezxhelper.utils.loadClassOrNull
 import com.github.kyuubiran.ezxhelper.utils.putStaticObject
 import com.github.kyuubiran.ezxhelper.utils.sameAs
-import com.kyant.capsule.ContinuousRoundedRectangle
-import com.kyant.capsule.continuities.G2Continuity
-import com.kyant.capsule.continuities.G2ContinuityProfile
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -55,15 +49,6 @@ private const val WETYPE_FONT_ASSET = "fonts/WE-Regular.ttf"
 private const val MODULE_WETYPE_FONT_ASSET = "WE-Regular.ttf"
 private const val WETYPE_BLUR_APPLY_MAX_RETRY = 6
 private const val WETYPE_BACKGROUND_SETTLE_RETRY = 3
-private val WETYPE_SMOOTH_CONTINUITY = G2Continuity(
-    profile = G2ContinuityProfile(
-        extendedFraction = 0.66,
-        arcFraction = 0.38,
-        bezierCurvatureScale = 1.10,
-        arcCurvatureScale = 1.10
-    ),
-    capsuleProfile = G2ContinuityProfile.Capsule
-)
 private val WETYPE_COLOR_REPLACEMENTS = mapOf(
     "g8" to Color.TRANSPARENT,
     "gb" to Color.TRANSPARENT,
@@ -85,7 +70,9 @@ private data class WeTypeWindowState(
     var backgroundCarrier: View? = null,
     var inputMethodService: Any? = null,
     var heightChangeListener: View.OnLayoutChangeListener? = null,
-    var registeredViews: MutableList<View> = mutableListOf()
+    var registeredViews: MutableList<View> = mutableListOf(),
+    var bottomLeftHardwareCornerRadius: Float? = null,
+    var bottomRightHardwareCornerRadius: Float? = null
 )
 
 private data class WeTypeViewSnapshot(
@@ -516,16 +503,13 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun applyWeTypeWindowCorner(inputMethodService: Any) {
         runCatching {
+            val state = getWeTypeWindowState(inputMethodService)
             val softInputWindow = inputMethodService.invokeMethodAs<Any>("getWindow") ?: return
             val window = softInputWindow.invokeMethodAs<Window>("getWindow")
                 ?: return
             val decorView = window.decorView ?: return
-            val radius = TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP,
-                WeTypeSettings.getCornerRadiusXposed(decorView.context).toFloat(),
-                decorView.resources.displayMetrics
-            )
-            applyContinuousTopCornerOutline(decorView, radius)
+            val cornerRadii = resolveWeTypeCornerRadii(decorView, decorView.context, state)
+            applyContinuousCornerOutline(decorView, cornerRadii)
         }
     }
 
@@ -533,6 +517,31 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         synchronized(weTypeWindowStates) {
             weTypeWindowStates.getOrPut(inputMethodService) { WeTypeWindowState() }
         }
+
+    private fun resolveWeTypeCornerRadii(
+        targetView: View,
+        context: Context,
+        state: WeTypeWindowState
+    ): WeTypeCornerRadii {
+        val topRadius = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            WeTypeSettings.getCornerRadiusXposed(context).toFloat(),
+            context.resources.displayMetrics
+        )
+        val insets = targetView.rootWindowInsets
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && insets != null) {
+            state.bottomLeftHardwareCornerRadius =
+                insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius?.toFloat()
+            state.bottomRightHardwareCornerRadius =
+                insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius?.toFloat()
+        }
+        return WeTypeCornerRadii(
+            topLeft = topRadius,
+            topRight = topRadius,
+            bottomRight = state.bottomRightHardwareCornerRadius ?: topRadius,
+            bottomLeft = state.bottomLeftHardwareCornerRadius ?: topRadius
+        )
+    }
 
     private fun collectWeTypeWindowSnapshot(inputMethodService: Any): WeTypeWindowSnapshot? {
         val softInputWindow = inputMethodService.invokeMethodAs<Any>("getWindow") ?: return null
@@ -590,22 +599,18 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         layoutParams.topMargin = backgroundTop
         carrier.layoutParams = layoutParams
 
-        val radius = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            WeTypeSettings.getCornerRadiusXposed(context).toFloat(),
-            context.resources.displayMetrics
-        )
+        val cornerRadii = resolveWeTypeCornerRadii(decorView, context, state)
 
         // 当目标高度小于圆角半径时，不绘制背景
-        if (backgroundHeight < radius) {
+        if (backgroundHeight < cornerRadii.maxRadius()) {
             carrier.visibility = View.GONE
             carrier.background = null
             return
         }
 
         carrier.visibility = View.VISIBLE
-        applyContinuousTopCornerOutline(carrier, radius)
-        carrier.background = createWeTypeBackgroundDrawable(carrier, context)
+        applyContinuousCornerOutline(carrier, cornerRadii)
+        carrier.background = createWeTypeBackgroundDrawable(carrier, context, cornerRadii)
 
         // 每次应用背景时重新注册高度监听器到最新的输入法视图上
         // 横竖屏切换后视图会重建，需要重新注册
@@ -690,28 +695,26 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun createWeTypeBackgroundDrawable(
         targetView: View,
-        context: Context
+        context: Context,
+        cornerRadii: WeTypeCornerRadii
     ): Drawable {
-        val radius = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            WeTypeSettings.getCornerRadiusXposed(context).toFloat(),
-            context.resources.displayMetrics
-        )
         val color = WeTypeSettings.getCurrentBackgroundColorXposed(context)
         val blurRadius = WeTypeSettings.getBlurRadiusXposed(context)
-        val tintDrawable = createWeTypeTintDrawable(color, radius)
-        val blurDrawable = createInternalBackgroundBlurDrawable(targetView, blurRadius, radius)
-        if (blurDrawable != null) {
-            return LayerDrawable(arrayOf(blurDrawable, tintDrawable))
+        val tintDrawable = createWeTypeTintDrawable(color, cornerRadii)
+        val blurDrawable = createInternalBackgroundBlurDrawable(targetView, blurRadius, cornerRadii)
+        val bloomStrokeDrawable = WeTypeBloomStrokeDrawable(context, cornerRadii, color)
+        val layers = buildList {
+            blurDrawable?.also(::add)
+            add(tintDrawable)
+            add(bloomStrokeDrawable)
         }
-
-        return tintDrawable
+        return if (layers.size == 1) layers.first() else LayerDrawable(layers.toTypedArray())
     }
 
     private fun createInternalBackgroundBlurDrawable(
         targetView: View,
         blurRadius: Int,
-        cornerRadius: Float
+        cornerRadii: WeTypeCornerRadii
     ): Drawable? {
         val viewRootImpl = runCatching { targetView.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull()
             ?: return null
@@ -737,77 +740,50 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 Float::class.javaPrimitiveType,
                 Float::class.javaPrimitiveType,
                 Float::class.javaPrimitiveType
-            ).invoke(blurDrawable, cornerRadius, cornerRadius, 0f, 0f)
+            ).invoke(
+                blurDrawable,
+                cornerRadii.topLeft,
+                cornerRadii.topRight,
+                cornerRadii.bottomRight,
+                cornerRadii.bottomLeft
+            )
         }.recoverCatching {
             blurDrawable.javaClass.getMethod(
                 "setCornerRadius",
                 Float::class.javaPrimitiveType
-            ).invoke(blurDrawable, cornerRadius)
+            ).invoke(blurDrawable, cornerRadii.maxRadius())
         }
         return blurDrawable
     }
 
     private fun createWeTypeTintDrawable(
         color: Int,
-        radius: Float
+        cornerRadii: WeTypeCornerRadii
     ): Drawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadii = floatArrayOf(
-            radius, radius,
-            radius, radius,
-            0f, 0f,
-            0f, 0f
-        )
+        this.cornerRadii = cornerRadii.toArray()
         setColor(color)
     }
 
-    private fun createContinuousTopRoundPath(
+    private fun createContinuousRoundPath(
         width: Float,
         height: Float,
-        radius: Float
-    ): android.graphics.Path {
-        val outline = ContinuousRoundedRectangle(
-            topStart = CornerSize(radius),
-            topEnd = CornerSize(radius),
-            bottomEnd = CornerSize(0f),
-            bottomStart = CornerSize(0f),
-            continuity = WETYPE_SMOOTH_CONTINUITY
-        ).createOutline(
-            size = Size(width, height),
-            layoutDirection = LayoutDirection.Ltr,
-            density = Density(1f)
-        )
-        return when (outline) {
-            is ComposeOutline.Generic -> outline.path.asAndroidPath()
-            is ComposeOutline.Rounded -> android.graphics.Path().apply {
-                addRoundRect(
-                    0f,
-                    0f,
-                    width,
-                    height,
-                    floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f),
-                    android.graphics.Path.Direction.CW
-                )
-            }
-            is ComposeOutline.Rectangle -> android.graphics.Path().apply {
-                addRect(0f, 0f, width, height, android.graphics.Path.Direction.CW)
-            }
-        }
-    }
+        cornerRadii: WeTypeCornerRadii
+    ): android.graphics.Path = createWeTypeContinuousRoundedPath(width, height, cornerRadii)
 
-    private fun applyContinuousTopCornerOutline(view: View, radius: Float) {
+    private fun applyContinuousCornerOutline(view: View, cornerRadii: WeTypeCornerRadii) {
         view.clipToOutline = true
         view.outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(target: View, outline: Outline) {
                 val width = target.width
                 val height = target.height
                 if (width <= 0 || height <= 0) return
-                val path = createContinuousTopRoundPath(width.toFloat(), height.toFloat(), radius)
+                val path = createContinuousRoundPath(width.toFloat(), height.toFloat(), cornerRadii)
                 runCatching {
                     Outline::class.java.getMethod("setPath", android.graphics.Path::class.java)
                         .invoke(outline, path)
                 }.onFailure {
-                    outline.setRoundRect(0, 0, width, height, radius)
+                    outline.setRoundRect(0, 0, width, height, cornerRadii.maxRadius())
                 }
             }
         }
