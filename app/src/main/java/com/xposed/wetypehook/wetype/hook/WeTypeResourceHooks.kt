@@ -11,9 +11,8 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
+import android.widget.FrameLayout
 import com.xposed.wetypehook.xposed.Log
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
@@ -29,8 +28,8 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object WeTypeResourceHooks {
-    private const val CANDIDATE_LAYOUT_NAME = "c2"
-    private const val CANDIDATE_PINYIN_CONTAINER_NAME = "a7j"
+    private const val CANDIDATE_PINYIN_CONTAINER_ACCESSOR_CLASS =
+        "com.tencent.wetype.plugin.hld.candidate.ImeCandidateView\$d2"
     private val SETTING_OPAQUE_BACKGROUND_VIEW_CLASSES = listOf(
         "com.tencent.wetype.plugin.hld.view.settingkeyboard.S10SettingKeyboardTypeView",
         "com.tencent.wetype.plugin.hld.view.settingkeyboard.S10SettingCustomToolbarView"
@@ -334,21 +333,12 @@ internal object WeTypeResourceHooks {
 
     fun hookCandidatePinyinLeftMargin() {
         runCatching {
-            LayoutInflater::class.java.getMethod(
-                "inflate",
-                Int::class.javaPrimitiveType,
-                ViewGroup::class.java
-            ).hookAfter { param ->
-                hookCandidatePinyinLayoutInflation(param.args[0] as? Int, param.result as? View)
-            }
-            LayoutInflater::class.java.getMethod(
-                "inflate",
-                Int::class.javaPrimitiveType,
-                ViewGroup::class.java,
-                Boolean::class.javaPrimitiveType
-            ).hookAfter { param ->
-                val inflatedRoot = (param.result as? View) ?: (param.args[1] as? View)
-                hookCandidatePinyinLayoutInflation(param.args[0] as? Int, inflatedRoot)
+            val candidateContainerAccessorClass = loadClassOrNull(CANDIDATE_PINYIN_CONTAINER_ACCESSOR_CLASS)
+                ?: error("Failed to load ImeCandidateView\$d2")
+            candidateContainerAccessorClass.getMethod("invoke").hookAfter { param ->
+                val container = param.result as? FrameLayout ?: return@hookAfter
+                applyCandidatePinyinLeftMargin(container)
+                ensureCandidatePinyinMarginSync(container)
             }
             Log.i("Success: Hook candidate pinyin left margin")
         }.onFailure {
@@ -381,17 +371,6 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    private fun hookCandidatePinyinLayoutInflation(layoutResId: Int?, inflatedRoot: View?) {
-        if (layoutResId == null || inflatedRoot == null) return
-        if (!isLayoutResourceName(inflatedRoot.resources, layoutResId, CANDIDATE_LAYOUT_NAME)) return
-        val candidatePinyinContainer = findViewByEntryName(
-            inflatedRoot,
-            CANDIDATE_PINYIN_CONTAINER_NAME
-        ) ?: return
-        applyCandidatePinyinLeftMargin(candidatePinyinContainer)
-        ensureCandidatePinyinMarginSync(candidatePinyinContainer)
-    }
-
     private fun ensureCandidatePinyinMarginSync(view: View) {
         if (candidatePinyinMarginListeners.containsKey(view)) return
         val layoutListener = View.OnLayoutChangeListener { changedView, _, _, _, _, _, _, _, _ ->
@@ -410,28 +389,6 @@ internal object WeTypeResourceHooks {
         view.addOnLayoutChangeListener(layoutListener)
         view.addOnAttachStateChangeListener(attachStateListener)
         candidatePinyinMarginListeners[view] = layoutListener
-    }
-
-    private fun isLayoutResourceName(resources: Resources, resId: Int, expectedName: String): Boolean {
-        val resourceType = runCatching { resources.getResourceTypeName(resId) }.getOrNull() ?: return false
-        if (resourceType != "layout") return false
-        val entryName = runCatching { resources.getResourceEntryName(resId) }.getOrNull() ?: return false
-        return entryName == expectedName
-    }
-
-    private fun findViewByEntryName(root: View, expectedName: String): View? {
-        val viewId = root.id
-        if (viewId != View.NO_ID) {
-            val entryName = runCatching {
-                root.resources.getResourceEntryName(viewId)
-            }.getOrNull()
-            if (entryName == expectedName) return root
-        }
-        val group = root as? ViewGroup ?: return null
-        for (index in 0 until group.childCount) {
-            findViewByEntryName(group.getChildAt(index), expectedName)?.also { return it }
-        }
-        return null
     }
 
     private fun applyCandidatePinyinLeftMargin(view: View) {

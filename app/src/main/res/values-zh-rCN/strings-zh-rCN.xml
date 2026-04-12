@@ -80,7 +80,7 @@
     <string name="settings_color_dialog_title">选择颜色</string>
     <string name="settings_cancel">取消</string>
     <string name="settings_confirm">确定</string>
-    <string name="settings_reset_toast">已恢复默认</string>
+    <string name="settings_reset_toast">已恢复默认, 重启输入法进程以生效</string>
     <string name="activation_required_title">模块未启用/作用域未重启</string>
     <string name="activation_required_summary">请保证已在 LSPosed 中启用该模块，重启作用域，已在 WeType 中看到美化效果。然后重新打开此桌面入口，即可进入寄生的 WeType 设置页。</string>
     <string name="activation_active_title">模块已启用</string>
