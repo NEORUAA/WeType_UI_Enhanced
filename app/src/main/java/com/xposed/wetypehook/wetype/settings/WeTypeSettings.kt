@@ -23,6 +23,7 @@ object WeTypeSettings {
     private const val KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP = "candidate_pinyin_left_margin_dp"
     private const val KEY_APPEARANCE_COLOR_PREFIX = "appearance_color_"
     private const val KEY_DISABLE_HOT_UPDATE = "disable_hot_update"
+    private const val KEY_TOOLBAR_ICON_BG_OPACITY = "toolbar_icon_bg_opacity"
     const val DEFAULT_LIGHT_COLOR = 0xA0D1D3D8.toInt()
     const val DEFAULT_DARK_COLOR = 0x90101010.toInt()
     const val DEFAULT_BLUR_RADIUS = 60
@@ -36,6 +37,7 @@ object WeTypeSettings {
     const val MAX_CANDIDATE_BACKGROUND_CORNER = 60
     const val DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP = 6
     const val DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP = 16
+    const val DEFAULT_TOOLBAR_ICON_BG_OPACITY = 200
     const val DEFAULT_DISABLE_HOT_UPDATE = true
 
     private val xposedPrefsLock = Any()
@@ -68,6 +70,7 @@ object WeTypeSettings {
         val candidateBackgroundLeftMarginDp: Int,
         val candidatePinyinLeftMarginDp: Int,
         val appearanceColors: Map<String, Int>,
+        val toolbarIconBgOpacity: Int,
         val disableHotUpdate: Boolean
     )
 
@@ -135,6 +138,7 @@ object WeTypeSettings {
             candidateBackgroundCorner = snapshot.candidateBackgroundCorner,
             candidateBackgroundLeftMarginDp = snapshot.candidateBackgroundLeftMarginDp,
             candidatePinyinLeftMarginDp = snapshot.candidatePinyinLeftMarginDp,
+            toolbarIconBgOpacity = snapshot.toolbarIconBgOpacity,
             appearanceColors = snapshot.appearanceColors,
             disableHotUpdate = snapshot.disableHotUpdate
         )
@@ -153,6 +157,7 @@ object WeTypeSettings {
         candidateBackgroundCorner: Float,
         candidateBackgroundLeftMarginDp: Int,
         candidatePinyinLeftMarginDp: Int,
+        toolbarIconBgOpacity: Int,
         appearanceColors: Map<String, Int>,
         disableHotUpdate: Boolean = DEFAULT_DISABLE_HOT_UPDATE
     ) {
@@ -172,6 +177,7 @@ object WeTypeSettings {
             candidateBackgroundCorner = candidateBackgroundCorner,
             candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp,
             candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp,
+            toolbarIconBgOpacity = toolbarIconBgOpacity,
             appearanceColors = sanitizedAppearanceColors,
             disableHotUpdate = disableHotUpdate
         )
@@ -205,6 +211,9 @@ object WeTypeSettings {
 
     fun getCandidateBackgroundLeftMarginDpXposed(): Int =
         readSnapshotXposed().candidateBackgroundLeftMarginDp
+
+    fun getToolbarIconBgOpacityXposed(): Int =
+        readSnapshotXposed().toolbarIconBgOpacity
 
     fun getCandidatePinyinLeftMarginDpXposed(): Int =
         readSnapshotXposed().candidatePinyinLeftMarginDp
@@ -265,6 +274,7 @@ object WeTypeSettings {
         candidateBackgroundCorner: Float,
         candidateBackgroundLeftMarginDp: Int,
         candidatePinyinLeftMarginDp: Int,
+        toolbarIconBgOpacity: Int,
         appearanceColors: Map<String, Int>,
         disableHotUpdate: Boolean
     ) {
@@ -293,6 +303,7 @@ object WeTypeSettings {
                 KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
                 candidatePinyinLeftMarginDp.coerceIn(0, 64)
             )
+            .putInt(KEY_TOOLBAR_ICON_BG_OPACITY, toolbarIconBgOpacity.coerceIn(0, 255))
             .putBoolean(KEY_DISABLE_HOT_UPDATE, disableHotUpdate)
         WeTypeAppearanceColorGroups.groups.forEach { group ->
             editor.putInt(
@@ -319,6 +330,7 @@ object WeTypeSettings {
             ),
             candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.coerceIn(0, 64),
             candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.coerceIn(0, 64),
+            toolbarIconBgOpacity = toolbarIconBgOpacity.coerceIn(0, 255),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 group.id to (appearanceColors[group.id] ?: group.defaultColor)
             },
@@ -386,6 +398,7 @@ object WeTypeSettings {
                 KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
                 DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP
             ).coerceIn(0, 64),
+            toolbarIconBgOpacity = getInt(KEY_TOOLBAR_ICON_BG_OPACITY, DEFAULT_TOOLBAR_ICON_BG_OPACITY).coerceIn(0, 255),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 group.id to getInt(
                     "$KEY_APPEARANCE_COLOR_PREFIX${group.id}",
@@ -413,6 +426,7 @@ object WeTypeSettings {
         candidateBackgroundCorner = DEFAULT_CANDIDATE_BACKGROUND_CORNER,
         candidateBackgroundLeftMarginDp = DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
         candidatePinyinLeftMarginDp = DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
+        toolbarIconBgOpacity = DEFAULT_TOOLBAR_ICON_BG_OPACITY,
         appearanceColors = WeTypeAppearanceColorGroups.defaultColors(),
         disableHotUpdate = DEFAULT_DISABLE_HOT_UPDATE
     )
@@ -429,6 +443,7 @@ object WeTypeSettings {
             contains(KEY_CANDIDATE_BACKGROUND_CORNER) ||
             contains(KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP) ||
             contains(KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP) ||
+            contains(KEY_TOOLBAR_ICON_BG_OPACITY) ||
             contains(KEY_DISABLE_HOT_UPDATE)
         ) {
             return true

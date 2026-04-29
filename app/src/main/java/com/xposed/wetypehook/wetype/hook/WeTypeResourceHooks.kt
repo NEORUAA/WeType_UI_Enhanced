@@ -534,6 +534,41 @@ internal object WeTypeResourceHooks {
         }
     }
 
+    fun hookToolbarIconBackground() {
+        runCatching {
+            val sClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s") ?: return
+            val containerId = sClass.getField("custom_toolbar_item_container_view").getInt(null)
+
+            val updateBackgroundOpacity = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val view = param.thisObject as? android.view.View ?: return
+                    if (view.id == containerId) {
+                        val drawable = param.args[0] as? android.graphics.drawable.Drawable ?: return
+                        val opacity = WeTypeSettings.getToolbarIconBgOpacityXposed()
+                        drawable.alpha = opacity
+                    }
+                }
+            }
+
+            XposedHelpers.findAndHookMethod(
+                android.view.View::class.java,
+                "setBackground",
+                android.graphics.drawable.Drawable::class.java,
+                updateBackgroundOpacity
+            )
+            XposedHelpers.findAndHookMethod(
+                android.view.View::class.java,
+                "setBackgroundDrawable",
+                android.graphics.drawable.Drawable::class.java,
+                updateBackgroundOpacity
+            )
+            Log.i("Success: Hook WeType toolbar icon background")
+        }.onFailure {
+            Log.i("Failed: Hook WeType toolbar icon background")
+            Log.i(it)
+        }
+    }
+
     fun hookSettingKeyboardOpaqueBackground() {
         SETTING_OPAQUE_BACKGROUND_VIEW_CLASSES.forEach { className ->
             runCatching {

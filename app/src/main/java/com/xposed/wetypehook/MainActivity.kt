@@ -432,6 +432,9 @@ private fun WeTypeSettingsScreen(
     var candidatePinyinLeftMarginDp by rememberSaveable {
         mutableStateOf(snapshot.candidatePinyinLeftMarginDp.toString())
     }
+    var toolbarIconBgOpacity by rememberSaveable {
+        mutableIntStateOf(snapshot.toolbarIconBgOpacity)
+    }
     var disableHotUpdate by rememberSaveable {
         mutableStateOf(snapshot.disableHotUpdate)
     }
@@ -502,6 +505,7 @@ private fun WeTypeSettingsScreen(
                 ?: WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
             candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.toIntOrNull()
                 ?: WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
+            toolbarIconBgOpacity = toolbarIconBgOpacity,
             appearanceColors = currentAppearanceColors(),
             disableHotUpdate = disableHotUpdate
         )
@@ -523,6 +527,7 @@ private fun WeTypeSettingsScreen(
         candidateBackgroundLeftMarginDp =
             WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP.toString()
         candidatePinyinLeftMarginDp = WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP.toString()
+        toolbarIconBgOpacity = WeTypeSettings.DEFAULT_TOOLBAR_ICON_BG_OPACITY
         disableHotUpdate = WeTypeSettings.DEFAULT_DISABLE_HOT_UPDATE
         appearanceGroups.forEachIndexed { index, group ->
             appearanceGroupColors[index] = group.defaultColor
@@ -767,6 +772,13 @@ private fun WeTypeSettingsScreen(
                             value = keyOpacity,
                             max = 255,
                             onValueChange = { keyOpacity = it }
+                        )
+
+                        SliderPreferenceItem(
+                            title = stringResource(R.string.settings_toolbar_icon_bg_opacity_title),
+                            value = toolbarIconBgOpacity,
+                            max = 255,
+                            onValueChange = { toolbarIconBgOpacity = it }
                         )
 
                         appearanceSectionGroups.forEach { group ->

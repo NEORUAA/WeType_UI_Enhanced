@@ -13,11 +13,11 @@ import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 
 internal class WeTypeIconDrawable(
     @FloatRange(from = 0.0, to = 1.0)
-    backgroundAlphaFraction: Float
+    private val backgroundAlphaFraction: Float
 ) : Drawable() {
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb((backgroundAlphaFraction * 255).toInt().coerceIn(0, 255), 255, 255, 255)
+        color = Color.WHITE
     }
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -27,8 +27,11 @@ internal class WeTypeIconDrawable(
         val bounds = bounds
         if (bounds.isEmpty) return
 
+        val userOpacity = WeTypeSettings.getToolbarIconBgOpacityXposed()
+        val bgAlpha = (userOpacity * backgroundAlphaFraction).toInt().coerceIn(0, 255)
+
         accentPaint.color = WeTypeSettings.getAppearanceColorXposed("theme_color")
-        backgroundPaint.alpha = resolveAlpha(Color.alpha(backgroundPaint.color))
+        backgroundPaint.alpha = resolveAlpha(bgAlpha)
         accentPaint.alpha = resolveAlpha(Color.alpha(accentPaint.color))
 
         canvas.save()

@@ -58,6 +58,7 @@
     <string name="settings_corner_title">Corner radius</string>
     <string name="settings_alpha_title">Background opacity</string>
     <string name="settings_key_opacity_title">Key opacity</string>
+    <string name="settings_toolbar_icon_bg_opacity_title">Toolbar icon bg opacity</string>
     <string name="settings_key_color_hook_alpha_title">Candidate background opacity</string>
     <string name="settings_custom_color">Custom background color</string>
     <string name="settings_appearance_color_group_summary">%1$d mapped entries · default %2$s</string>

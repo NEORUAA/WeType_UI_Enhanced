@@ -58,6 +58,7 @@
     <string name="settings_corner_title">圆角大小</string>
     <string name="settings_alpha_title">背景不透明度</string>
     <string name="settings_key_opacity_title">按键不透明度</string>
+    <string name="settings_toolbar_icon_bg_opacity_title">工具栏图标背景不透明度</string>
     <string name="settings_key_color_hook_alpha_title">候选词背景不透明度</string>
     <string name="settings_custom_color">自定义背景颜色</string>
     <string name="settings_appearance_color_group_summary">%1$d 个映射项 · 默认 %2$s</string>

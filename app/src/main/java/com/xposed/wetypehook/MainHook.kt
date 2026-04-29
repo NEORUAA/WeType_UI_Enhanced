@@ -162,6 +162,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         hookWeTypeIntentEntry()
         hookWeTypeAboutLogoEntry()
         WeTypeResourceHooks.hookKeyboardLogo()
+        WeTypeResourceHooks.hookToolbarIconBackground()
     }
 
     private fun installBaseImeHooks(forceTransparentBottomView: Boolean) {
