@@ -40,7 +40,6 @@ import java.util.concurrent.ConcurrentHashMap
 private const val TAG = "miuiime"
 private const val WETYPE_PACKAGE = "com.tencent.wetype"
 private const val WETYPE_ABOUT_ACTIVITY = "com.tencent.wetype.plugin.hld.ui.ImeAboutActivity"
-private const val WETYPE_ABOUT_LOGO_ID_NAME = "ch"
 private const val WETYPE_ABOUT_LOGO_TAG_KEY = 0x4D495549
 private const val WETYPE_FONT_ASSET = "fonts/WE-Regular.ttf"
 private const val MODULE_WETYPE_FONT_ASSET = "WE-Regular.ttf"
@@ -49,18 +48,31 @@ private const val TRANSPARENT_BOTTOM_VIEW_DARK_CONTENT = 0xFFF5F5F5.toInt()
 private const val TRANSPARENT_BOTTOM_VIEW_LIGHT_CONTENT = 0xFF202020.toInt()
 
 private val WETYPE_COLOR_REPLACEMENTS = mapOf(
+    // 3.2.0
     "g8" to Color.TRANSPARENT,
     "gb" to Color.TRANSPARENT,
     "k5" to Color.TRANSPARENT,
     "k9" to Color.TRANSPARENT,
     "ng" to Color.TRANSPARENT,
-    "pq" to Color.TRANSPARENT
+    "pq" to Color.TRANSPARENT,
+    // 3.3.0
+    "v" to Color.TRANSPARENT,
+    "ps" to Color.TRANSPARENT,
+    "k6" to Color.TRANSPARENT,
+    "k_" to Color.TRANSPARENT,
+    "ni" to Color.TRANSPARENT
 )
 private val WETYPE_DRAWABLE_REPLACEMENTS = mapOf(
+    // 3.2.0
     "ic" to R.drawable.wetype_ic,
     "gi" to R.drawable.wetype_gi,
     "ib" to R.drawable.wetype_ib,
     "gj" to R.drawable.wetype_gj,
+    // 3.3.0
+    "ir" to R.drawable.wetype_ic,
+    "gx" to R.drawable.wetype_gi,
+    "iq" to R.drawable.wetype_ib,
+    "gy" to R.drawable.wetype_gj
 )
 
 private data class PackageMethods(
@@ -96,7 +108,6 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
     private var assetManagerAddAssetPathMethod: Method? = null
     private var viewListenerInfoField: Field? = null
     private var onClickListenerField: Field? = null
-    private var aboutLogoResId: Int? = null
 
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
         modulePath = startupParam.modulePath
@@ -163,6 +174,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         hookWeTypeDisableHotUpdate()
         hookWeTypeIntentEntry()
         hookWeTypeAboutLogoEntry()
+        WeTypeResourceHooks.hookKeyboardLogo()
     }
 
     private fun installBaseImeHooks(forceTransparentBottomView: Boolean) {
@@ -348,10 +360,8 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun hookWeTypeAboutLogoClick(activity: Activity) {
         runCatching {
-            val logoResId = resolveAboutLogoResId(activity.resources)
-            if (logoResId == 0) return
-
-            val logoView = activity.findViewById<View>(logoResId) ?: return
+            val decorView = activity.window?.decorView ?: return
+            val logoView = findFirstViewByClassName(decorView, "com.tencent.wetype.plugin.hld.view.ImeRadiusImageView") ?: return
             if (logoView.getTag(WETYPE_ABOUT_LOGO_TAG_KEY) == true) return
 
             val originalClickListener = resolveOnClickListener(logoView)
@@ -372,15 +382,16 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
-    private fun resolveAboutLogoResId(resources: Resources): Int {
-        aboutLogoResId?.let { return it }
-        val resolved = resources.getIdentifier(
-            WETYPE_ABOUT_LOGO_ID_NAME,
-            "id",
-            WETYPE_PACKAGE
-        )
-        aboutLogoResId = resolved
-        return resolved
+    private fun findFirstViewByClassName(view: View?, className: String): View? {
+        if (view == null) return null
+        if (view.javaClass.name == className) return view
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val found = findFirstViewByClassName(view.getChildAt(i), className)
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     private fun resolveOnClickListener(view: View): View.OnClickListener? {

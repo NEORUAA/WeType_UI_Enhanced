@@ -14,6 +14,8 @@ import android.util.TypedValue
 import android.view.View
 import android.widget.FrameLayout
 import com.xposed.wetypehook.xposed.Log
+import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XposedHelpers
 import com.xposed.wetypehook.xposed.findMethod
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
@@ -443,6 +445,57 @@ internal object WeTypeResourceHooks {
         }
     }
 
+    fun hookKeyboardLogo() {
+        runCatching {
+            val sClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s") ?: return
+            val logoIvId = sClass.getField("logo_iv").getInt(null)
+
+            val replaceLogo = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    val imageView = param.thisObject as? android.widget.ImageView ?: return
+                    if (imageView.id == logoIvId) {
+                        val drawableArg = param.args.getOrNull(0)
+                        if (drawableArg is WeTypeIconDrawable) return
+
+                        var alpha = 0.9f
+                        if (param.method.name == "setImageResource") {
+                            val resId = param.args[0] as Int
+                            val resName = runCatching { imageView.resources.getResourceEntryName(resId) }.getOrNull() ?: ""
+                            if (resName.contains("dark") || resName == "io" || resName == "j3") {
+                                alpha = 0.2f
+                            }
+                            imageView.setImageDrawable(WeTypeIconDrawable(alpha))
+                            param.result = null
+                        } else {
+                            val uiMode = imageView.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+                            if (uiMode == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+                                alpha = 0.2f
+                            }
+                            param.args[0] = WeTypeIconDrawable(alpha)
+                        }
+                    }
+                }
+            }
+
+            XposedHelpers.findAndHookMethod(
+                android.widget.ImageView::class.java,
+                "setImageResource",
+                Int::class.javaPrimitiveType,
+                replaceLogo
+            )
+            XposedHelpers.findAndHookMethod(
+                android.widget.ImageView::class.java,
+                "setImageDrawable",
+                android.graphics.drawable.Drawable::class.java,
+                replaceLogo
+            )
+            Log.i("Success: Hook WeType keyboard logo")
+        }.onFailure {
+            Log.i("Failed: Hook WeType keyboard logo")
+            Log.i(it)
+        }
+    }
+
     fun hookSettingKeyboardOpaqueBackground() {
         SETTING_OPAQUE_BACKGROUND_VIEW_CLASSES.forEach { className ->
             runCatching {
@@ -597,12 +650,6 @@ internal object WeTypeResourceHooks {
         getModuleResources: (Resources) -> Resources
     ): Drawable? {
         val drawableName = runCatching { resources.getResourceEntryName(drawableResId) }.getOrNull() ?: return null
-        if (drawableName == "io") {
-            return WeTypeIconDrawable(backgroundAlphaFraction = 0.2f)
-        }
-        if (drawableName == "in") {
-            return WeTypeIconDrawable(backgroundAlphaFraction = 0.9f)
-        }
         val replacementResId = drawableReplacements[drawableName] ?: return null
         val replacementDrawable = getModuleResources(resources).getDrawable(replacementResId, null)
         return replacementDrawable.constantState?.newDrawable(resources, theme)?.mutate()
