@@ -1,5 +1,4 @@
 package com.xposed.wetypehook
-
 import android.app.Activity
 import android.content.Context
 import android.content.IntentFilter
@@ -56,10 +55,10 @@ private val WETYPE_COLOR_REPLACEMENTS = mapOf(
     "ime_skin_keyboard_end_color" to Color.TRANSPARENT
 )
 private val WETYPE_DRAWABLE_REPLACEMENTS = mapOf(
-    "ime_keyboard_full_gradient_bg_color_dark" to R.drawable.wetype_ic,
-    "ime_emoji_keyboard_gradient_bg_color" to R.drawable.wetype_gi,
-    "ime_keyboard_full_gradient_bg_color" to R.drawable.wetype_ib,
-    "ime_emoji_keyboard_gradient_bg_color_dark" to R.drawable.wetype_gj
+    "ime_emoji_keyboard_gradient_bg_color" to R.drawable.wetype_full_gradient_bg,
+    "ime_keyboard_full_gradient_bg_color" to R.drawable.wetype_full_gradient_bg,
+    "ime_emoji_keyboard_gradient_bg_color_dark" to R.drawable.wetype_full_gradient_bg_dark,
+    "ime_keyboard_full_gradient_bg_color_dark" to R.drawable.wetype_full_gradient_bg_dark
 )
 
 private data class PackageMethods(
@@ -80,7 +79,8 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         "com.iflytek.inputmethod.miui",
         "com.sohu.inputmethod.sogou.xiaomi",
         "com.baidu.input_mi",
-        "com.miui.catcherpatch"
+        "com.miui.catcherpatch",
+        "com.xiaomi.type"
     )
     private val installedHookTokens = ConcurrentHashMap.newKeySet<String>()
     private val imeDetectionCache = Collections.synchronizedMap(WeakHashMap<Any, Boolean>())

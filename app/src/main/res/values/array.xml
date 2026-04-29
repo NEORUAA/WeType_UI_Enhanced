@@ -9,5 +9,6 @@
         <item>com.baidu.input_mi</item>
         <item>com.google.android.inputmethod.latin</item>
         <item>com.tencent.wetype</item>
+        <item>com.xiaomi.type</item>
     </string-array>
 </resources>
