@@ -48,31 +48,18 @@ private const val TRANSPARENT_BOTTOM_VIEW_DARK_CONTENT = 0xFFF5F5F5.toInt()
 private const val TRANSPARENT_BOTTOM_VIEW_LIGHT_CONTENT = 0xFF202020.toInt()
 
 private val WETYPE_COLOR_REPLACEMENTS = mapOf(
-    // 3.2.0
-    "g8" to Color.TRANSPARENT,
-    "gb" to Color.TRANSPARENT,
-    "k5" to Color.TRANSPARENT,
-    "k9" to Color.TRANSPARENT,
-    "ng" to Color.TRANSPARENT,
-    "pq" to Color.TRANSPARENT,
-    // 3.3.0
-    "v" to Color.TRANSPARENT,
-    "ps" to Color.TRANSPARENT,
-    "k6" to Color.TRANSPARENT,
-    "k_" to Color.TRANSPARENT,
-    "ni" to Color.TRANSPARENT
+    "ime_skin_candidate_end_color" to Color.TRANSPARENT,
+    "ime_skin_candidate_start_color" to Color.TRANSPARENT,
+    "ime_skin_dark_candidate_end_color" to Color.TRANSPARENT,
+    "ime_skin_dark_candidate_start_color" to Color.TRANSPARENT,
+    "ime_skin_dark_keyboard_end_color" to Color.TRANSPARENT,
+    "ime_skin_keyboard_end_color" to Color.TRANSPARENT
 )
 private val WETYPE_DRAWABLE_REPLACEMENTS = mapOf(
-    // 3.2.0
-    "ic" to R.drawable.wetype_ic,
-    "gi" to R.drawable.wetype_gi,
-    "ib" to R.drawable.wetype_ib,
-    "gj" to R.drawable.wetype_gj,
-    // 3.3.0
-    "ir" to R.drawable.wetype_ic,
-    "gx" to R.drawable.wetype_gi,
-    "iq" to R.drawable.wetype_ib,
-    "gy" to R.drawable.wetype_gj
+    "ime_keyboard_full_gradient_bg_color_dark" to R.drawable.wetype_ic,
+    "ime_emoji_keyboard_gradient_bg_color" to R.drawable.wetype_gi,
+    "ime_keyboard_full_gradient_bg_color" to R.drawable.wetype_ib,
+    "ime_emoji_keyboard_gradient_bg_color_dark" to R.drawable.wetype_gj
 )
 
 private data class PackageMethods(

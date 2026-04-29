@@ -39,27 +39,31 @@ object WeTypeAppearanceColorGroups {
                 "LightGreen_170", "LightGreen_80", "LightGreen_80_CARE",
                 "LightGreen_90", "LightGreen_90_CARE", "LightGreen_BG_100",
                 "LightGreen_BG_110", "LightGreen_BG_130", "LightGreen_BG_90",
-                "af", "bf", "dq", "dr", "ds", "dt",
+                "abc_search_url_text_normal", "btn_green_text_color", "ime_candidate_content_select_bg_color_dark",
+                "ime_candidate_content_select_bg_color_light", "ime_candidate_syllable_select_bg_color_dark", "ime_candidate_syllable_select_bg_color_light",
                 "ime_color_14_Alpha_10", "ime_color_14_Alpha_10_light",
                 "ime_color_14_Alpha_20", "ime_color_14_Alpha_20_light",
                 "ime_color_14_Alpha_30", "ime_color_14_Alpha_30_light",
                 "ime_color_14_Alpha_50_dark", "ime_color_14_Alpha_50_light",
                 "ime_color_14_dark", "ime_color_14_light",
-                "g7", "h_", "ha", "hb", "hg", "i1", "i2", "i3", "i4", "ih",
-                "k4", "l4", "l5", "l6", "ly", "qn", "qq", "qr", "xt", "a2i"
+                "ime_skin_candidate_content_select_bg_color", "ime_skin_color_14", "ime_skin_color_14_Alpha_20",
+                "ime_skin_color_14_Alpha_50", "ime_skin_color_19", "ime_skin_color_btn_white_text",
+                "ime_skin_color_btn_white_text_pressed", "ime_skin_color_divider", "ime_skin_color_emoji_enter_btn_bg_disabled", "ime_skin_dark_Brand_90",
+                "ime_skin_dark_candidate_content_select_bg_color", "ime_skin_dark_color_14", "ime_skin_dark_color_14_Alpha_20", "ime_skin_dark_color_14_Alpha_50",
+                "ime_skin_dark_color_emoji_enter_btn_bg_disabled", "level_best_color", "level_middle_color", "level_normal_color", "material_deep_teal_500", "toasterro"
             )
         ),
         WeTypeAppearanceColorGroup(
             id = LIGHT_KEY_COLOR_GROUP_ID,
             displayName = "浅色模式按键色",
             defaultColor = 0xFFfcfcfe.toInt(),
-            colorResourceNames = setOf("h6")
+            colorResourceNames = setOf("ime_skin_color_12")
         ),
         WeTypeAppearanceColorGroup(
             id = DARK_KEY_COLOR_GROUP_ID,
             displayName = "深色模式按键色",
             defaultColor = 0xFF707070.toInt(),
-            colorResourceNames = setOf("l0")
+            colorResourceNames = setOf("ime_skin_dark_color_12")
         )
     )
 
