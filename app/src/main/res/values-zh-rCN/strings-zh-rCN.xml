@@ -65,6 +65,15 @@
     <string name="settings_custom_color">自定义背景颜色</string>
     <string name="settings_appearance_color_group_summary">%1$d 个映射项 · 默认 %2$s</string>
     <string name="settings_appearance_color_input_label">分组颜色</string>
+    <string name="settings_module_color_summary">仅作用于键盘图标 · 默认 %1$s</string>
+    <string name="settings_icon_scale_title">键盘图标大小</string>
+    <string name="settings_icon_shape_title">自定义图标形状</string>
+    <string name="settings_icon_shape_desc">可粘贴 SVG path 或完整 SVG 源码（从 &lt;svg&gt; 开始），多条各占一行；留空则使用内置徽标。</string>
+    <string name="settings_icon_shape_label">SVG path 数据</string>
+    <string name="settings_icon_shape_import">从 SVG 文件导入</string>
+    <string name="settings_icon_shape_reset">恢复默认图标</string>
+    <string name="settings_icon_shape_import_empty">所选文件中没有找到 path 元素</string>
+    <string name="settings_icon_shape_imported">已导入 %1$d 条 path</string>
     <string name="settings_light_key_color_title">浅色模式按键色</string>
     <string name="settings_dark_key_color_title">深色模式按键色</string>
     <string name="settings_key_color_group_summary">透明度请用下方滑块调整 · 当前 %1$d / 255 · %2$d 个映射项</string>

@@ -2,6 +2,7 @@ package com.xposed.wetypehook
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.res.AssetManager
 import android.content.res.Configuration
 import android.content.res.Resources
@@ -303,6 +304,7 @@ class MainHook : XposedModule() {
         HookEnvironment.withHookScope("wetype.window-blur") { hookWeTypeWindowBlur() }
         HookEnvironment.withHookScope("wetype.disable-update") { hookWeTypeDisableHotUpdate() }
         HookEnvironment.withHookScope("wetype.intent-entry") { hookWeTypeIntentEntry() }
+        HookEnvironment.withHookScope("wetype.activity-result") { hookWeTypeActivityResultEntry() }
         HookEnvironment.withHookScope("wetype.about-entry") { hookWeTypeAboutLogoEntry() }
         HookEnvironment.withHookScope("wetype.keyboard-logo") { WeTypeResourceHooks.hookKeyboardLogo() }
         HookEnvironment.withHookScope("wetype.toolbar-icon") { WeTypeResourceHooks.hookToolbarIconBackground() }
@@ -710,6 +712,21 @@ class MainHook : XposedModule() {
             }
         }.onFailure {
             Log.e("Failed:Hook WeType intent entry")
+            Log.i(it)
+        }
+    }
+
+    private fun hookWeTypeActivityResultEntry() {
+        runCatching {
+            findMethod("android.app.Activity") {
+                name == "onActivityResult" && parameterTypes.size == 3
+            }.hookAfter { param ->
+                val requestCode = param.args[0] as? Int ?: return@hookAfter
+                val resultCode = param.args[1] as? Int ?: return@hookAfter
+                HostActivityResultBridge.dispatch(requestCode, resultCode, param.args[2] as? Intent)
+            }
+        }.onFailure {
+            Log.e("Failed:Hook WeType activity result entry")
             Log.i(it)
         }
     }
