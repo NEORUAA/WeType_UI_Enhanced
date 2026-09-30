@@ -16,6 +16,7 @@ import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.SvgPathNormalizer
 import com.xposed.wetypehook.wetype.settings.ICON_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
+import kotlin.math.roundToInt
 
 internal class WeTypeIconDrawable(
     @FloatRange(from = 0.0, to = 1.0)
@@ -36,9 +37,9 @@ internal class WeTypeIconDrawable(
         val userOpacity = WeTypeSettings.getToolbarIconBgOpacityXposed()
         val bgAlpha = (userOpacity * backgroundAlphaFraction).toInt().coerceIn(0, 255)
 
-        accentPaint.color = WeTypeSettings.getAppearanceColorXposed(ICON_COLOR_GROUP_ID)
+        val accentColor = WeTypeSettings.getAppearanceColorXposed(ICON_COLOR_GROUP_ID)
+        accentPaint.color = accentColor
         backgroundPaint.alpha = resolveAlpha(bgAlpha)
-        accentPaint.alpha = resolveAlpha(Color.alpha(accentPaint.color))
 
         canvas.save()
         // 只在绘制阶段缩放并居中，不改 intrinsicWidth/Height：图标区尺寸由布局决定，
@@ -53,7 +54,10 @@ internal class WeTypeIconDrawable(
             bounds.height() * iconScale / VIEWPORT_SIZE
         )
         canvas.drawPath(BACKGROUND_PATH, backgroundPaint)
-        accentPaths().forEach { canvas.drawPath(it, accentPaint) }
+        accentPaths().forEach { entry ->
+            accentPaint.alpha = resolveAlpha((Color.alpha(accentColor) * entry.fillOpacity).roundToInt())
+            canvas.drawPath(entry.path, accentPaint)
+        }
         canvas.restore()
     }
 
@@ -61,7 +65,7 @@ internal class WeTypeIconDrawable(
      * 返回当前生效的前景 path 列表。按原始字符串做缓存键，只在配置变化时重新解析，
      * 这样每帧 draw 只是一次 volatile 读；解析结果为空时回退内置徽标，避免图标消失。
      */
-    private fun accentPaths(): List<Path> {
+    private fun accentPaths(): List<AccentPath> {
         val source = WeTypeSettings.getCustomIconPathXposed()
         if (source == accentCache.source) return accentCache.paths
         val parsed = buildAccentPaths(source)
@@ -69,39 +73,47 @@ internal class WeTypeIconDrawable(
         return parsed
     }
 
-    private fun buildAccentPaths(source: String): List<Path> {
-        if (source.isBlank()) return listOf(DEFAULT_ACCENT_PATH)
-        val raw = pathDataEntries(source).mapNotNull { data ->
-            runCatching { PathParser.createPathFromPathData(SvgPathNormalizer.normalize(data)) }
+    private fun buildAccentPaths(source: String): List<AccentPath> {
+        if (source.isBlank()) return listOf(DEFAULT_ACCENT)
+        val raw = pathDataEntries(source).mapNotNull { entry ->
+            runCatching {
+                PathParser.createPathFromPathData(SvgPathNormalizer.normalize(entry.pathData))?.apply {
+                    val m = entry.transform
+                    transform(Matrix().apply {
+                        setValues(floatArrayOf(m[0], m[2], m[4], m[1], m[3], m[5], 0f, 0f, 1f))
+                    })
+                    fillType = if (entry.evenOdd) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+                }?.let { AccentPath(it, entry.fillOpacity) }
+            }
                 .getOrNull()
         }
         if (raw.isEmpty()) {
             // 静默回退会让「导入了却没生效」无从排查，这里留一条错误日志
             Log.e(TAG, "Failed to parse custom icon path, falling back to the built-in badge")
-            return listOf(DEFAULT_ACCENT_PATH)
+            return listOf(DEFAULT_ACCENT)
         }
 
         val union = RectF()
         raw.forEach { candidate ->
             val measured = RectF()
-            candidate.computeBounds(measured, true)
+            if (candidate.fillOpacity > 0f) candidate.path.computeBounds(measured, true)
             if (!measured.isEmpty) union.union(measured)
         }
         val matrix = fitMatrix(union)
         return raw.map { candidate ->
-            Path(candidate).apply {
+            AccentPath(Path(candidate.path).apply {
                 matrix?.let { transform(it) }
-                fillType = Path.FillType.EVEN_ODD
-            }
+            }, candidate.fillOpacity)
         }
     }
 
     /** 输入既可能是每行一条 path，也可能是完整的 `<svg>` 文档。 */
-    private fun pathDataEntries(source: String): List<String> =
+    private fun pathDataEntries(source: String): List<SvgPathImporter.PathEntry> =
         if (source.trimStart().startsWith("<")) {
-            SvgPathImporter.extractPathData(source)
+            SvgPathImporter.extractPaths(source)
         } else {
-            source.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            source.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
+                .map { SvgPathImporter.PathEntry(it) }.toList()
         }
 
     /**
@@ -160,11 +172,13 @@ internal class WeTypeIconDrawable(
             requireNotNull(PathParser.createPathFromPathData(ACCENT_PATH_DATA)).apply {
                 fillType = Path.FillType.EVEN_ODD
             }
+        private data class AccentPath(val path: Path, val fillOpacity: Float = 1f)
+        private val DEFAULT_ACCENT = AccentPath(DEFAULT_ACCENT_PATH)
 
         /** 进程内共享：source 与 paths 一并替换，避免多实例并发写时读到半更新状态。 */
-        private class ParsedIconPaths(val source: String, val paths: List<Path>)
+        private class ParsedIconPaths(val source: String, val paths: List<AccentPath>)
 
         @Volatile
-        private var accentCache = ParsedIconPaths("", listOf(DEFAULT_ACCENT_PATH))
+        private var accentCache = ParsedIconPaths("", listOf(DEFAULT_ACCENT))
     }
 }

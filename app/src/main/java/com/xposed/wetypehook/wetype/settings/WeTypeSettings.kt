@@ -363,7 +363,7 @@ object WeTypeSettings {
         return editor.commit()
     }
 
-    private fun Map<String, Any>.toSnapshot(): Snapshot {
+    internal fun Map<String, Any>.toSnapshot(): Snapshot {
         val shouldMigrateLegacyKeyOpacity = contains(KEY_KEY_OPACITY) &&
             !getBoolean(KEY_KEY_OPACITY_MIGRATED, false)
         val legacyKeyOpacity = if (shouldMigrateLegacyKeyOpacity) {
@@ -409,7 +409,10 @@ object WeTypeSettings {
                 .coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 val key = "$KEY_APPEARANCE_COLOR_PREFIX${group.id}"
-                val fallbackColor = if (legacyKeyOpacity != null) {
+                val fallbackColor = if (group.id == ICON_COLOR_GROUP_ID) {
+                    // Until the independent icon color is saved, inherit the old logo color.
+                    getInt("${KEY_APPEARANCE_COLOR_PREFIX}theme_color", group.defaultColor)
+                } else if (legacyKeyOpacity != null) {
                     legacyKeyColorDefaults[group.id] ?: group.defaultColor
                 } else {
                     group.defaultColor

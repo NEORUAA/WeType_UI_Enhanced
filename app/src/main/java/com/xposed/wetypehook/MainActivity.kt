@@ -1585,7 +1585,7 @@ private fun IconShapePreferenceItem(
                     ?.use { stream -> stream.readBytes().decodeToString() }
             }.getOrNull()
         }
-        val paths = text?.let(SvgPathImporter::extractPathData).orEmpty()
+        val paths = text?.let(SvgPathImporter::extractPaths).orEmpty()
         if (paths.isEmpty()) {
             Toast.makeText(
                 context,
@@ -1594,7 +1594,8 @@ private fun IconShapePreferenceItem(
             ).show()
             return
         }
-        onValueChange(paths.joinToString("\n"))
+        // Keep the document: extracting only d would discard transforms and fill rules.
+        onValueChange(requireNotNull(text))
         Toast.makeText(
             context,
             context.getString(R.string.settings_icon_shape_imported, paths.size),
