@@ -38,6 +38,9 @@ internal class HostPreferencesFile(private val file: File) {
                     "int" -> values[name] = requireNotNull(value).toInt()
                     "float" -> values[name] = requireNotNull(value).toFloat()
                     "boolean" -> values[name] = requireNotNull(value).toBooleanStrict()
+                    // <string name="k">text</string> carries its value as element text,
+                    // not as a value attribute, so it must be read with nextText().
+                    "string" -> values[name] = parser.nextText()
                 }
             }
             check(closedMap) { "Incomplete preferences XML" }

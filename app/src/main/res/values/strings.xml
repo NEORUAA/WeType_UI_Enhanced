@@ -65,6 +65,15 @@
     <string name="settings_custom_color">Custom background color</string>
     <string name="settings_appearance_color_group_summary">%1$d mapped entries · default %2$s</string>
     <string name="settings_appearance_color_input_label">Group color</string>
+    <string name="settings_module_color_summary">Icon only · default %1$s</string>
+    <string name="settings_icon_scale_title">Keyboard icon size</string>
+    <string name="settings_icon_shape_title">Custom icon shape</string>
+    <string name="settings_icon_shape_desc">Paste SVG path data or a full SVG document, one path per line. Leave empty to use the built-in badge.</string>
+    <string name="settings_icon_shape_label">SVG path data</string>
+    <string name="settings_icon_shape_import">Import from SVG file</string>
+    <string name="settings_icon_shape_reset">Reset icon</string>
+    <string name="settings_icon_shape_import_empty">No path element found in the selected file</string>
+    <string name="settings_icon_shape_imported">Imported %1$d path(s)</string>
     <string name="settings_light_key_color_title">Light mode key color</string>
     <string name="settings_dark_key_color_title">Dark mode key color</string>
     <string name="settings_key_color_group_summary">Use the slider below to adjust opacity · %1$d / 255 opacity · %2$d mapped entries</string>

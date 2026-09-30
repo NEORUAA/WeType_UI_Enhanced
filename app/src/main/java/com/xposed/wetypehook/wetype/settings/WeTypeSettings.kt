@@ -34,6 +34,8 @@ object WeTypeSettings {
     private const val KEY_APPEARANCE_COLOR_PREFIX = "appearance_color_"
     private const val KEY_DISABLE_HOT_UPDATE = "disable_hot_update"
     private const val KEY_TOOLBAR_ICON_BG_OPACITY = "toolbar_icon_bg_opacity"
+    private const val KEY_CUSTOM_ICON_PATH = "custom_icon_path"
+    private const val KEY_ICON_SCALE = "icon_scale"
     const val DEFAULT_LIGHT_COLOR = 0xBDD4D4D4.toInt()
     const val DEFAULT_DARK_COLOR = 0x40000000
     const val DEFAULT_HYPER_MATERIAL_ENABLED = false
@@ -51,6 +53,10 @@ object WeTypeSettings {
     const val DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP = 16
     const val DEFAULT_TOOLBAR_ICON_BG_OPACITY = 150
     const val DEFAULT_DISABLE_HOT_UPDATE = true
+    const val DEFAULT_CUSTOM_ICON_PATH = ""
+    const val DEFAULT_ICON_SCALE = 1.0f
+    const val MIN_ICON_SCALE = 0.6f
+    const val MAX_ICON_SCALE = 1.4f
 
     private val legacyKeyColorDefaults = mapOf(
         LIGHT_KEY_COLOR_GROUP_ID to 0xFFfcfcfe.toInt(),
@@ -79,6 +85,8 @@ object WeTypeSettings {
         val candidatePinyinLeftMarginDp: Int,
         val appearanceColors: Map<String, Int>,
         val toolbarIconBgOpacity: Int,
+        val customIconPath: String,
+        val iconScale: Float,
         val disableHotUpdate: Boolean,
         val hyperMaterialEnabled: Boolean,
         val glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides()
@@ -162,6 +170,8 @@ object WeTypeSettings {
         candidatePinyinLeftMarginDp: Int,
         toolbarIconBgOpacity: Int,
         appearanceColors: Map<String, Int>,
+        customIconPath: String = DEFAULT_CUSTOM_ICON_PATH,
+        iconScale: Float = DEFAULT_ICON_SCALE,
         disableHotUpdate: Boolean = DEFAULT_DISABLE_HOT_UPDATE,
         hyperMaterialEnabled: Boolean = DEFAULT_HYPER_MATERIAL_ENABLED,
         glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides(),
@@ -183,6 +193,8 @@ object WeTypeSettings {
             candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.coerceIn(0, 64),
             candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.coerceIn(0, 64),
             toolbarIconBgOpacity = toolbarIconBgOpacity.coerceIn(0, 255),
+            customIconPath = customIconPath,
+            iconScale = iconScale.coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 group.id to (appearanceColors[group.id] ?: group.defaultColor)
             },
@@ -243,6 +255,18 @@ object WeTypeSettings {
     fun getToolbarIconBgOpacityXposed(): Int =
         readSnapshotXposed().toolbarIconBgOpacity
 
+    /**
+     * 自定义 logo 前景的 SVG path 数据，多条 path 以换行分隔；空串表示使用内置徽标。
+     * Xposed 侧每次读取，配合 FileObserver 失效机制可在保存后即时生效。
+     */
+    fun getCustomIconPathXposed(): String = readSnapshotXposed().customIconPath
+
+    /**
+     * 键盘图标缩放系数（0.6~1.4，1.0 为原始大小）。
+     * Xposed 侧每次读取，保存后由 FileObserver 失效机制即时生效。
+     */
+    fun getIconScaleXposed(): Float = readSnapshotXposed().iconScale
+
     fun getCandidatePinyinLeftMarginDpXposed(): Int =
         readSnapshotXposed().candidatePinyinLeftMarginDp
 
@@ -299,6 +323,8 @@ object WeTypeSettings {
                 snapshot.candidatePinyinLeftMarginDp
             )
             .putInt(KEY_TOOLBAR_ICON_BG_OPACITY, snapshot.toolbarIconBgOpacity)
+            .putString(KEY_CUSTOM_ICON_PATH, snapshot.customIconPath)
+            .putFloat(KEY_ICON_SCALE, snapshot.iconScale)
             .putBoolean(KEY_HYPER_MATERIAL_ENABLED, snapshot.hyperMaterialEnabled)
             .putBoolean(KEY_DISABLE_HOT_UPDATE, snapshot.disableHotUpdate)
             .putBoolean(KEY_KEY_OPACITY_MIGRATED, true)
@@ -337,7 +363,7 @@ object WeTypeSettings {
         return editor.commit()
     }
 
-    private fun Map<String, Any>.toSnapshot(): Snapshot {
+    internal fun Map<String, Any>.toSnapshot(): Snapshot {
         val shouldMigrateLegacyKeyOpacity = contains(KEY_KEY_OPACITY) &&
             !getBoolean(KEY_KEY_OPACITY_MIGRATED, false)
         val legacyKeyOpacity = if (shouldMigrateLegacyKeyOpacity) {
@@ -378,9 +404,15 @@ object WeTypeSettings {
                 DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP
             ).coerceIn(0, 64),
             toolbarIconBgOpacity = getInt(KEY_TOOLBAR_ICON_BG_OPACITY, DEFAULT_TOOLBAR_ICON_BG_OPACITY).coerceIn(0, 255),
+            customIconPath = getString(KEY_CUSTOM_ICON_PATH, DEFAULT_CUSTOM_ICON_PATH),
+            iconScale = getFloat(KEY_ICON_SCALE, DEFAULT_ICON_SCALE)
+                .coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 val key = "$KEY_APPEARANCE_COLOR_PREFIX${group.id}"
-                val fallbackColor = if (legacyKeyOpacity != null) {
+                val fallbackColor = if (group.id == ICON_COLOR_GROUP_ID) {
+                    // Until the independent icon color is saved, inherit the old logo color.
+                    getInt("${KEY_APPEARANCE_COLOR_PREFIX}theme_color", group.defaultColor)
+                } else if (legacyKeyOpacity != null) {
                     legacyKeyColorDefaults[group.id] ?: group.defaultColor
                 } else {
                     group.defaultColor
@@ -411,6 +443,8 @@ object WeTypeSettings {
 
     private fun Map<String, Any>.getBoolean(key: String, default: Boolean): Boolean = this[key] as? Boolean ?: default
 
+    private fun Map<String, Any>.getString(key: String, default: String): String = this[key] as? String ?: default
+
     private fun defaultSnapshot(): Snapshot = Snapshot(
         lightColor = DEFAULT_LIGHT_COLOR,
         darkColor = DEFAULT_DARK_COLOR,
@@ -424,6 +458,8 @@ object WeTypeSettings {
         candidateBackgroundLeftMarginDp = DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
         candidatePinyinLeftMarginDp = DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
         toolbarIconBgOpacity = DEFAULT_TOOLBAR_ICON_BG_OPACITY,
+        customIconPath = DEFAULT_CUSTOM_ICON_PATH,
+        iconScale = DEFAULT_ICON_SCALE,
         appearanceColors = WeTypeAppearanceColorGroups.defaultColors(),
         disableHotUpdate = DEFAULT_DISABLE_HOT_UPDATE,
         hyperMaterialEnabled = DEFAULT_HYPER_MATERIAL_ENABLED

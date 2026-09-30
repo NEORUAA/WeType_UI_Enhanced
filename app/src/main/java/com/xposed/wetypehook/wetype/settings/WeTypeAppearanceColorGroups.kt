@@ -5,6 +5,11 @@ import com.xposed.wetypehook.R
 
 const val LIGHT_KEY_COLOR_GROUP_ID = "transparent_h6"
 const val DARK_KEY_COLOR_GROUP_ID = "transparent_l0"
+/**
+ * 键盘左上角 logo 的前景（徽标）色。与 "theme_color" 刻意拆开：品牌色会 HueShift 染遍整个输入法，
+ * 而只想改图标颜色时不应联动按键与候选栏；默认值同品牌色，保证旧版本升级后图标外观不变。
+ */
+const val ICON_COLOR_GROUP_ID = "icon_color"
 
 enum class WeTypeAppearanceColorMode {
     Direct,
@@ -59,6 +64,11 @@ object WeTypeAppearanceColorGroups {
                 "ime_skin_dark_candidate_content_select_bg_color", "ime_skin_dark_color_14", "ime_skin_dark_color_14_Alpha_20", "ime_skin_dark_color_14_Alpha_50",
                 "ime_skin_dark_color_emoji_enter_btn_bg_disabled", "level_best_color", "level_middle_color", "level_normal_color", "material_deep_teal_500", "toasterro"
             )
+        ),
+        WeTypeAppearanceColorGroup(
+            id = ICON_COLOR_GROUP_ID,
+            displayName = "键盘图标颜色",
+            defaultColor = 0xFF23c891.toInt()
         ),
         WeTypeAppearanceColorGroup(
             id = LIGHT_KEY_COLOR_GROUP_ID,
