@@ -1002,7 +1002,7 @@ private fun WeTypeSettingsScreen(
                             onClick = {
                                 val intent = Intent(
                                     Intent.ACTION_VIEW,
-                                    Uri.parse("https://github.com/NEORUAA/MIUI_IME_Unlock")
+                                    Uri.parse("https://github.com/NEORUAA/WeType_UI_Enhanced")
                                 )
                                 context.startActivity(intent)
                             }
