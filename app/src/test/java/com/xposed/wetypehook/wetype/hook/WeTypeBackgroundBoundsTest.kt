@@ -8,6 +8,22 @@ class WeTypeBackgroundBoundsTest {
     private val decor = layout(0, 2400)
 
     @Test
+    fun relayoutDefersMaterialUpdateButHiddenContentRemovesIt() {
+        assertEquals(WeTypeBackgroundUpdate.PendingLayout, resolveWeTypeBackgroundUpdate(
+            decor.copy(isLayoutRequested = true), listOf(layout(1400, 1000))
+        ))
+        assertEquals(WeTypeBackgroundUpdate.PendingLayout, resolveWeTypeBackgroundUpdate(
+            decor, listOf(layout(1400, 1000).copy(isLayoutRequested = true))
+        ))
+        assertEquals(WeTypeBackgroundUpdate.Hidden, resolveWeTypeBackgroundUpdate(
+            decor.copy(isShown = false, isLayoutRequested = true), listOf(layout(1400, 1000))
+        ))
+        assertEquals(WeTypeBackgroundUpdate.Hidden, resolveWeTypeBackgroundUpdate(decor, emptyList()))
+        assertEquals(WeTypeBackgroundUpdate.Ready(WeTypeBackgroundBounds(1400, 1000)),
+            resolveWeTypeBackgroundUpdate(decor, listOf(layout(1400, 1000))))
+    }
+
+    @Test
     fun doesNotUseMeasuredOrPreviousBoundsBeforeLayout() {
         assertNull(resolveWeTypeBackgroundBounds(decor, listOf(
             layout(0, 0).copy(isLaidOut = false)

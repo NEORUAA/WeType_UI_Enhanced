@@ -8,7 +8,6 @@ import android.graphics.Path
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.RoundedCorner
@@ -19,14 +18,12 @@ import android.view.ViewTreeObserver
 import android.view.Window
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import androidx.core.graphics.drawable.toDrawable
 import com.xposed.wetypehook.xposed.Log
 import com.xposed.wetypehook.xposed.HookEnvironment
 import com.xposed.wetypehook.xposed.findMethodInHierarchy
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
-import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.invokeMethodAs
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
@@ -43,28 +40,6 @@ import java.util.concurrent.TimeUnit
 
 private const val WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX = 2
 private const val WETYPE_HARDWARE_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.hardware."
-private const val WETYPE_CANDIDATE_VIEW_CLASS_NAME =
-    "com.tencent.wetype.plugin.hld.candidate.ImeCandidateView"
-private const val WETYPE_SETTINGS_KEYBOARD_CLASS_NAME =
-    "com.tencent.wetype.plugin.hld.keyboard.S10SettingsKeyboard"
-private const val WETYPE_SETTINGS_RECYCLER_VIEW_CLASS_NAME =
-    "com.tencent.wetype.plugin.hld.view.settingkeyboard.S10SettingRecyclerView"
-private const val WETYPE_SETTING_VIEW_PACKAGE_PREFIX =
-    "com.tencent.wetype.plugin.hld.view.settingkeyboard."
-
-private val WETYPE_TRANSPARENT_OVERLAY_CLASS_NAMES = setOf(
-    "com.tencent.wetype.plugin.hld.keyboard.selfdraw.S11EmojiKeyboard",
-    "com.tencent.wetype.plugin.hld.keyboard.S15CustomPhraseAndClipboardKeyboard",
-    "com.tencent.wetype.plugin.hld.keyboard.S29ClipboardCleanRecordKeyboard",
-    "com.tencent.wetype.plugin.hld.keyboard.S34ClipboardBombKeyboard",
-    "com.tencent.wetype.plugin.hld.keyboard.S35RequestAIKeyboard"
-)
-
-private val WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES = setOf(
-    "${WETYPE_SETTING_VIEW_PACKAGE_PREFIX}S10SettingKeyboardTypeView",
-    "${WETYPE_SETTING_VIEW_PACKAGE_PREFIX}S10SettingCustomToolbarView"
-)
-
 private val WETYPE_HARDWARE_VIEW_ID_NAMES = arrayOf(
     "hardware_keyboard_candidate_container_view",
     "hardware_keyboard_pending_container_view",
@@ -74,11 +49,6 @@ private val WETYPE_HARDWARE_VIEW_ID_NAMES = arrayOf(
 )
 
 internal object WeTypeWindowHooks {
-    private data class WeTypeGlobalLayoutRegistration(
-        val observer: WeakReference<ViewTreeObserver>,
-        val listener: ViewTreeObserver.OnGlobalLayoutListener
-    )
-
     private data class BackgroundStyle(
         val color: Int,
         val blurRadius: Int,
@@ -141,38 +111,13 @@ internal object WeTypeWindowHooks {
     )
 
     private val weTypeWindowStates = WeakHashMap<Any, WeTypeWindowState>()
-    private val overlayStateLock = Any()
-    private val overlayRootsByContainer =
-        WeakHashMap<ViewGroup, MutableMap<View, Boolean>>()
-    private val overlayContainerByRoot = WeakHashMap<View, WeakReference<ViewGroup>>()
-    private val coveredUnderlayOriginalVisibilities =
-        WeakHashMap<ViewGroup, MutableMap<View, Int>>()
-    private val internalSettingUnderlayOriginalVisibilities =
-        WeakHashMap<ViewGroup, MutableMap<View, Int>>()
-    private val internalSettingContainers = WeakHashMap<ViewGroup, Boolean>()
-    private val internalSettingContainerByOverlay = WeakHashMap<View, WeakReference<ViewGroup>>()
-    private val externalOverlayAttachListeners =
-        WeakHashMap<View, View.OnAttachStateChangeListener>()
-    private val internalSettingAttachListeners =
-        WeakHashMap<View, View.OnAttachStateChangeListener>()
-    private val externalOverlayLayoutRegistrations =
-        WeakHashMap<ViewGroup, WeTypeGlobalLayoutRegistration>()
-    private val internalSettingLayoutRegistrations =
-        WeakHashMap<ViewGroup, WeTypeGlobalLayoutRegistration>()
-    private val overlaySyncPosted = WeakHashMap<ViewGroup, Boolean>()
-    private val internalSettingSyncPosted = WeakHashMap<ViewGroup, Boolean>()
-    private var weTypeKeyboardBaseClasses: Set<Class<*>> = emptySet()
-    private var weTypeCandidateViewClass: Class<*>? = null
-    @Volatile
-    private var overlayWindowVisible = false
 
     fun prepareForHotReload(): Boolean {
         val states = synchronized(weTypeWindowStates) {
             weTypeWindowStates.values.toList()
         }
         val cleaned = runOnMainThreadBlocking {
-            overlayWindowVisible = false
-            restoreAllCoveredUnderlays(clearTrackedRoots = true)
+            WeTypeOverlayCompositor.clearAll()
             states.forEach { state ->
                 state.windowVisible = false
                 removeBackgroundListeners(state)
@@ -184,727 +129,16 @@ internal object WeTypeWindowHooks {
             synchronized(weTypeWindowStates) {
                 weTypeWindowStates.clear()
             }
-            synchronized(overlayStateLock) {
-                overlayRootsByContainer.clear()
-                overlayContainerByRoot.clear()
-                coveredUnderlayOriginalVisibilities.clear()
-                internalSettingUnderlayOriginalVisibilities.clear()
-                internalSettingContainers.clear()
-                internalSettingContainerByOverlay.clear()
-                externalOverlayAttachListeners.clear()
-                internalSettingAttachListeners.clear()
-                externalOverlayLayoutRegistrations.clear()
-                internalSettingLayoutRegistrations.clear()
-                overlaySyncPosted.clear()
-                internalSettingSyncPosted.clear()
-                weTypeKeyboardBaseClasses = emptySet()
-                weTypeCandidateViewClass = null
-            }
         }
         return cleaned
     }
 
     fun hookTransparentOverlayUnderlay() {
-        val resolvedExternalOverlays = WETYPE_TRANSPARENT_OVERLAY_CLASS_NAMES.mapNotNull { className ->
-            runCatching {
-                val overlayClass = loadClassOrNull(className)
-                    ?: error("Failed to resolve $className")
-                val showMethod = overlayClass.declaredMethods.single { method ->
-                    method.returnType == Void.TYPE &&
-                        method.parameterTypes.size == 2 &&
-                        method.parameterTypes[1] == Bundle::class.java
-                }.apply { isAccessible = true }
-                overlayClass to showMethod
-            }.onFailure { error ->
-                Log.i("Failed: Hook transparent overlay for $className")
-                Log.i(error)
-            }.getOrNull()
-        }
-
-        weTypeKeyboardBaseClasses = resolvedExternalOverlays.mapNotNull { (overlayClass, _) ->
-            runCatching {
-                findKeyboardBaseClass(overlayClass)
-            }.onFailure { error ->
-                Log.i("Failed: Resolve WeType keyboard base for ${overlayClass.name}")
-                Log.i(error)
-            }.getOrNull()
-        }.toSet()
-        weTypeCandidateViewClass = loadClassOrNull(WETYPE_CANDIDATE_VIEW_CLASS_NAME).also { candidateClass ->
-            if (candidateClass == null) {
-                Log.i("Failed: Resolve WeType candidate view for transparent overlays")
-            }
-        }
-
-        resolvedExternalOverlays.forEach { (overlayClass, showMethod) ->
-            runCatching {
-                showMethod.hookAfter { param ->
-                    reconcileShownOverlayRoot(param.thisObject as? View)
-                }
-                Log.i("Success: Hook transparent overlay for ${overlayClass.name}")
-            }.onFailure { error ->
-                Log.i("Failed: Hook transparent overlay for ${overlayClass.name}")
-                Log.i(error)
-            }
-        }
-
-        hookInternalSettingOverlays()
-
-        val inputMethodService = loadClassOrNull("android.inputmethodservice.InputMethodService")
-        runCatching {
-            inputMethodService?.getMethod("onWindowShown")?.hookAfter { param ->
-                overlayWindowVisible = true
-                reconcileCurrentOverlayUnderlays(param.thisObject)
-            }
-        }.onFailure(Log::i)
-        runCatching {
-            inputMethodService?.getMethod("onWindowHidden")?.hookAfter {
-                overlayWindowVisible = false
-                restoreAllCoveredUnderlays(clearTrackedRoots = true)
-            }
-        }.onFailure(Log::i)
-        runCatching {
-            inputMethodService?.getMethod("onDestroy")?.hookAfter {
-                overlayWindowVisible = false
-                restoreAllCoveredUnderlays(clearTrackedRoots = true)
-            }
-        }.onFailure(Log::i)
-
-        if (resolvedExternalOverlays.isEmpty()) {
-            Log.i("Failed: Hook WeType transparent overlay underlay visibility")
-        } else {
-            Log.i("Success: Hook WeType transparent overlay underlay visibility")
-        }
+        WeTypeOverlayCompositor.install()
     }
 
     fun reconcileCurrentOverlayUnderlays(rootViews: List<View>) {
-        if (rootViews.isEmpty()) return
-        overlayWindowVisible = true
-        rootViews.forEach { root ->
-            fun visit(view: View) {
-                when (view.javaClass.name) {
-                    in WETYPE_TRANSPARENT_OVERLAY_CLASS_NAMES ->
-                        reconcileShownOverlayRoot(view)
-                    in WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES ->
-                        reconcileInternalSettingOverlay(view)
-                }
-                if (view is ViewGroup) {
-                    repeat(view.childCount) { index -> visit(view.getChildAt(index)) }
-                }
-            }
-            visit(root)
-        }
-        scheduleKnownOverlayContainers()
-        scheduleKnownInternalSettingContainers()
-    }
-
-    private fun reconcileCurrentOverlayUnderlays(inputMethodService: Any) {
-        val decorView = resolveInputMethodDecorView(inputMethodService) ?: return
-        reconcileCurrentOverlayUnderlays(listOf(decorView))
-        HookEnvironment.postTracked(decorView, 48L) {
-            reconcileCurrentOverlayUnderlays(listOf(decorView))
-        }
-        HookEnvironment.postTracked(decorView, 144L) {
-            reconcileCurrentOverlayUnderlays(listOf(decorView))
-        }
-    }
-
-    private fun reconcileShownOverlayRoot(view: View?) {
-        if (!overlayWindowVisible) return
-        val overlayRoot = view?.takeIf {
-            it.javaClass.name in WETYPE_TRANSPARENT_OVERLAY_CLASS_NAMES
-        } ?: return
-        ensureExternalOverlayAttachListener(overlayRoot)
-        fun registerWhenAttached(retriesRemaining: Int) {
-            val container = findOverlayKeyboardContainer(overlayRoot)
-            if (container != null) {
-                registerOverlayRoot(container, overlayRoot)
-                scheduleOverlayUnderlaySync(container)
-            } else if (retriesRemaining > 0) {
-                HookEnvironment.postTracked(overlayRoot, 32L) {
-                    registerWhenAttached(retriesRemaining - 1)
-                }
-            }
-        }
-        registerWhenAttached(retriesRemaining = 5)
-    }
-
-    private fun registerOverlayRoot(container: ViewGroup, overlayRoot: View) {
-        synchronized(overlayStateLock) {
-            overlayRootsByContainer
-                .getOrPut(container) { WeakHashMap() }[overlayRoot] = true
-            overlayContainerByRoot[overlayRoot] = WeakReference(container)
-        }
-        ensureExternalOverlayLayoutRegistration(container)
-    }
-
-    private fun reconcileDetachedOverlayRoot(view: View?) {
-        val overlayRoot = view?.takeIf {
-            it.javaClass.name in WETYPE_TRANSPARENT_OVERLAY_CLASS_NAMES
-        } ?: return
-        val container = synchronized(overlayStateLock) {
-            overlayContainerByRoot[overlayRoot]?.get()
-        } ?: return
-        scheduleOverlayUnderlaySync(container)
-    }
-
-    private fun ensureExternalOverlayAttachListener(overlayRoot: View) {
-        val listener = synchronized(overlayStateLock) {
-            if (externalOverlayAttachListeners.containsKey(overlayRoot)) {
-                null
-            } else {
-                object : View.OnAttachStateChangeListener {
-                    override fun onViewAttachedToWindow(view: View) {
-                        reconcileShownOverlayRoot(view)
-                    }
-
-                    override fun onViewDetachedFromWindow(view: View) {
-                        reconcileDetachedOverlayRoot(view)
-                    }
-                }.also { externalOverlayAttachListeners[overlayRoot] = it }
-            }
-        } ?: return
-        overlayRoot.addOnAttachStateChangeListener(listener)
-    }
-
-    private fun scheduleOverlayUnderlaySync(container: ViewGroup) {
-        ensureExternalOverlayLayoutRegistration(container)
-        val shouldPost = synchronized(overlayStateLock) {
-            if (overlaySyncPosted[container] == true) {
-                false
-            } else {
-                overlaySyncPosted[container] = true
-                true
-            }
-        }
-        if (!shouldPost) return
-
-        val posted = HookEnvironment.postTracked(container) {
-            synchronized(overlayStateLock) { overlaySyncPosted.remove(container) }
-            syncOverlayUnderlay(container)
-            HookEnvironment.postTracked(container, 48L) { syncOverlayUnderlay(container) }
-            HookEnvironment.postTracked(container, 144L) { syncOverlayUnderlay(container) }
-        }
-        if (!posted) {
-            synchronized(overlayStateLock) { overlaySyncPosted.remove(container) }
-            syncOverlayUnderlay(container)
-        }
-    }
-
-    private fun syncOverlayUnderlay(container: ViewGroup) {
-        if (!overlayWindowVisible) {
-            restoreCoveredUnderlays(container)
-            removeExternalOverlayLayoutRegistration(container)
-            return
-        }
-        val visibleOverlayRoots = synchronized(overlayStateLock) {
-            val originals = coveredUnderlayOriginalVisibilities[container]
-            overlayRootsByContainer[container]
-                ?.keys
-                ?.filter { root ->
-                    // A lower overlay remains host-visible while we hide it below a modal.
-                    // Keep tracking it so closing the modal restores only that overlay.
-                    val hiddenByModule = root.visibility == View.INVISIBLE &&
-                        originals?.get(root) == View.VISIBLE &&
-                        (root.parent as? View)?.isShown == true
-                    root.isAttachedToWindow &&
-                        (root.isShown || hiddenByModule) &&
-                        isDescendantOf(root, container)
-                }
-                .orEmpty()
-                .toSet()
-        }
-        if (visibleOverlayRoots.isNotEmpty()) {
-            hideCoveredUnderlays(container, visibleOverlayRoots)
-        } else {
-            restoreCoveredUnderlays(container)
-            removeExternalOverlayLayoutRegistration(container)
-        }
-    }
-
-    private fun ensureExternalOverlayLayoutRegistration(container: ViewGroup) {
-        // Host reset/hide methods are intentionally not resolved: framework visibility and
-        // reparenting changes are observed only while a transparent overlay is active.
-        val observer = container.viewTreeObserver
-        if (!observer.isAlive) return
-        var previousRegistration: WeTypeGlobalLayoutRegistration? = null
-        val registration = synchronized(overlayStateLock) {
-            externalOverlayLayoutRegistrations[container]?.let { current ->
-                if (current.observer.get() === observer) return@synchronized null
-                previousRegistration = current
-            }
-            val containerReference = WeakReference(container)
-            val listener = ViewTreeObserver.OnGlobalLayoutListener {
-                containerReference.get()?.let(::syncOverlayUnderlay)
-            }
-            WeTypeGlobalLayoutRegistration(WeakReference(observer), listener).also {
-                externalOverlayLayoutRegistrations[container] = it
-            }
-        } ?: return
-        previousRegistration?.let { previous ->
-            previous.observer.get()?.takeIf { observer -> observer.isAlive }
-                ?.removeOnGlobalLayoutListener(previous.listener)
-        }
-        observer.addOnGlobalLayoutListener(registration.listener)
-    }
-
-    private fun removeExternalOverlayLayoutRegistration(container: ViewGroup) {
-        val registration = synchronized(overlayStateLock) {
-            externalOverlayLayoutRegistrations.remove(container)
-        } ?: return
-        registration.observer.get()?.takeIf { observer -> observer.isAlive }
-            ?.removeOnGlobalLayoutListener(registration.listener)
-    }
-
-    private fun removeAllExternalOverlayLayoutRegistrations() {
-        val containers = synchronized(overlayStateLock) {
-            externalOverlayLayoutRegistrations.keys.toList()
-        }
-        containers.forEach(::removeExternalOverlayLayoutRegistration)
-    }
-
-    private fun hideCoveredUnderlays(
-        container: ViewGroup,
-        visibleOverlayRoots: Set<View>
-    ) {
-        val coveredUnderlays = findCoveredUnderlays(container).filter { underlay ->
-            visibleOverlayRoots.any { overlay ->
-                isWeTypeViewBehindOverlay<View>(
-                    underlay, overlay, container,
-                    parentOf = { it.parent as? View },
-                    compareSiblings = { parent, first, second ->
-                        // Host keyboard layers are FrameLayouts: Z takes precedence over child order.
-                        val zOrder = first.z.compareTo(second.z)
-                        if (zOrder != 0) zOrder else {
-                            val group = parent as ViewGroup
-                            group.indexOfChild(first).compareTo(group.indexOfChild(second))
-                        }
-                    }
-                )
-            }
-        }.toSet()
-        val rootsToRestore = mutableListOf<Pair<View, Int>>()
-        val rootsToHide = mutableListOf<View>()
-        synchronized(overlayStateLock) {
-            val originals = coveredUnderlayOriginalVisibilities
-                .getOrPut(container) { WeakHashMap() }
-            // A host may reuse/reparent a previously covered keyboard above the active overlay.
-            originals.keys.toList().forEach { root ->
-                if (root !in coveredUnderlays) {
-                    originals.remove(root)?.let { visibility ->
-                        rootsToRestore += root to visibility
-                    }
-                }
-            }
-            coveredUnderlays.forEach { underlay ->
-                if (
-                    underlay.visibility == View.VISIBLE &&
-                    underlay.isShown
-                ) {
-                    if (!originals.containsKey(underlay)) {
-                        originals[underlay] = underlay.visibility
-                    }
-                    rootsToHide += underlay
-                }
-            }
-        }
-        rootsToRestore.forEach { (view, visibility) ->
-            if (view.visibility == View.INVISIBLE) {
-                setOverlayManagedVisibility(view, visibility)
-            }
-        }
-        rootsToHide.forEach { underlay ->
-            setOverlayManagedVisibility(underlay, View.INVISIBLE)
-        }
-    }
-
-    private fun restoreCoveredUnderlays(container: ViewGroup) {
-        val originals = synchronized(overlayStateLock) {
-            coveredUnderlayOriginalVisibilities.remove(container)
-                ?.entries
-                ?.toList()
-                .orEmpty()
-        }
-        originals.forEach { (view, visibility) ->
-            if (view.visibility == View.INVISIBLE) {
-                setOverlayManagedVisibility(view, visibility)
-            }
-        }
-    }
-
-    private fun restoreAllCoveredUnderlays(clearTrackedRoots: Boolean) {
-        restoreAllInternalSettingUnderlays(clearTrackedOverlays = clearTrackedRoots)
-        removeAllExternalOverlayLayoutRegistrations()
-        val containers = synchronized(overlayStateLock) {
-            coveredUnderlayOriginalVisibilities.keys.toList()
-        }
-        containers.forEach(::restoreCoveredUnderlays)
-        if (clearTrackedRoots) {
-            removeAllExternalOverlayAttachListeners()
-            synchronized(overlayStateLock) {
-                overlayRootsByContainer.clear()
-                overlayContainerByRoot.clear()
-                overlaySyncPosted.clear()
-            }
-        }
-    }
-
-    private fun scheduleKnownOverlayContainers() {
-        val containers = synchronized(overlayStateLock) {
-            overlayRootsByContainer.keys.toList()
-        }
-        containers.forEach(::scheduleOverlayUnderlaySync)
-    }
-
-    private fun scheduleKnownInternalSettingContainers() {
-        val containers = synchronized(overlayStateLock) {
-            internalSettingContainers.keys.toList()
-        }
-        containers.forEach(::scheduleInternalSettingUnderlaySync)
-    }
-
-    private fun removeAllExternalOverlayAttachListeners() {
-        val listeners = synchronized(overlayStateLock) {
-            externalOverlayAttachListeners.entries.map { (view, listener) -> view to listener }
-                .also { externalOverlayAttachListeners.clear() }
-        }
-        listeners.forEach { (view, listener) ->
-            view.removeOnAttachStateChangeListener(listener)
-        }
-    }
-
-    private fun setOverlayManagedVisibility(view: View, visibility: Int) {
-        view.visibility = visibility
-    }
-
-    private fun findCoveredUnderlays(root: View): List<View> {
-        val result = mutableListOf<View>()
-        fun visit(view: View) {
-            if (isWeTypeKeyboardRoot(view) || isWeTypeCandidateView(view)) {
-                result += view
-                return
-            }
-            if (view is ViewGroup) {
-                repeat(view.childCount) { index -> visit(view.getChildAt(index)) }
-            }
-        }
-        visit(root)
-        return result
-    }
-
-    private fun hookInternalSettingOverlays() {
-        val hookedRenderMethods = mutableSetOf<java.lang.reflect.Method>()
-        WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES.forEach { className ->
-            runCatching {
-                val overlayClass = loadClassOrNull(className)
-                    ?: error("Failed to resolve $className")
-                val renderMethod = overlayClass.findMethodInHierarchy {
-                    returnType == Void.TYPE &&
-                        parameterTypes.contentEquals(
-                            arrayOf(
-                                View::class.java,
-                                Bundle::class.java,
-                                Boolean::class.javaPrimitiveType
-                            )
-                        )
-                }
-                if (hookedRenderMethods.add(renderMethod)) {
-                    renderMethod.hookBefore { param ->
-                        registerInternalSettingOverlay(param.thisObject as? View)
-                    }
-                    renderMethod.hookAfter { param ->
-                        (param.thisObject as? View)?.let { overlay ->
-                            reconcileInternalSettingOverlay(overlay)
-                            scheduleInternalSettingOverlayReconcile(overlay)
-                        }
-                    }
-                }
-                Log.i("Success: Hook internal setting overlay for $className")
-            }.onFailure { error ->
-                Log.i("Failed: Hook internal setting overlay for $className")
-                Log.i(error)
-            }
-        }
-    }
-
-    private fun registerInternalSettingOverlay(target: View?) {
-        if (!overlayWindowVisible) return
-        val overlay = target?.takeIf { view ->
-            view.javaClass.name in WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES &&
-                hasAncestorClass(view, WETYPE_SETTINGS_KEYBOARD_CLASS_NAME)
-        } ?: return
-        val container = overlay.parent as? ViewGroup ?: return
-        synchronized(overlayStateLock) {
-            internalSettingContainerByOverlay[overlay] = WeakReference(container)
-            internalSettingContainers[container] = true
-        }
-        ensureInternalSettingAttachListener(overlay)
-        ensureInternalSettingLayoutRegistration(container)
-        hideInternalSettingUnderlay(container)
-    }
-
-    private fun scheduleInternalSettingOverlayReconcile(overlay: View) {
-        val reconcile = {
-            reconcileInternalSettingOverlay(overlay)
-            Unit
-        }
-        if (!HookEnvironment.postTracked(overlay, 48L, reconcile)) reconcile()
-        HookEnvironment.postTracked(overlay, 144L, reconcile)
-    }
-
-    private fun hideInternalSettingUnderlay(container: ViewGroup) {
-        val underlays = buildList {
-            repeat(container.childCount) { index ->
-                val child = container.getChildAt(index)
-                if (
-                    child is LinearLayout &&
-                    child.visibility == View.VISIBLE &&
-                    containsDescendantClass(child, WETYPE_SETTINGS_RECYCLER_VIEW_CLASS_NAME)
-                ) {
-                    add(child)
-                }
-            }
-        }
-        val rootsToHide = synchronized(overlayStateLock) {
-            val originals = internalSettingUnderlayOriginalVisibilities
-                .getOrPut(container) { WeakHashMap() }
-            underlays.filter { underlay ->
-                if (!originals.containsKey(underlay)) {
-                    originals[underlay] = underlay.visibility
-                }
-                true
-            }
-        }
-        rootsToHide.forEach { underlay ->
-            setOverlayManagedVisibility(underlay, View.INVISIBLE)
-        }
-    }
-
-    private fun reconcileInternalSettingOverlay(view: View?) {
-        if (!overlayWindowVisible) return
-        val overlay = view?.takeIf { candidate ->
-            candidate.javaClass.name in WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES
-        } ?: return
-        val container = resolveInternalSettingContainer(overlay) ?: return
-        synchronized(overlayStateLock) {
-            internalSettingContainers[container] = true
-        }
-        ensureInternalSettingAttachListener(overlay)
-        ensureInternalSettingLayoutRegistration(container)
-        syncInternalSettingUnderlay(container)
-    }
-
-    private fun scheduleInternalSettingUnderlaySync(container: ViewGroup) {
-        ensureInternalSettingLayoutRegistration(container)
-        val shouldPost = synchronized(overlayStateLock) {
-            if (internalSettingSyncPosted[container] == true) {
-                false
-            } else {
-                internalSettingSyncPosted[container] = true
-                true
-            }
-        }
-        if (!shouldPost) return
-
-        val posted = HookEnvironment.postTracked(container) {
-            synchronized(overlayStateLock) { internalSettingSyncPosted.remove(container) }
-            syncInternalSettingUnderlay(container)
-            HookEnvironment.postTracked(container, 48L) { syncInternalSettingUnderlay(container) }
-            HookEnvironment.postTracked(container, 144L) { syncInternalSettingUnderlay(container) }
-        }
-        if (!posted) {
-            synchronized(overlayStateLock) { internalSettingSyncPosted.remove(container) }
-            syncInternalSettingUnderlay(container)
-        }
-    }
-
-    private fun syncInternalSettingUnderlay(container: ViewGroup) {
-        if (!overlayWindowVisible) {
-            restoreInternalSettingUnderlay(container)
-            removeInternalSettingLayoutRegistration(container)
-            return
-        }
-        val hasVisibleOverlay = buildList {
-            repeat(container.childCount) { index -> add(container.getChildAt(index)) }
-        }.any { child ->
-            child.javaClass.name in WETYPE_INTERNAL_SETTING_OVERLAY_CLASS_NAMES &&
-                child.isAttachedToWindow &&
-                child.isShown
-        }
-        if (hasVisibleOverlay) {
-            hideInternalSettingUnderlay(container)
-        } else {
-            restoreInternalSettingUnderlay(container)
-            removeInternalSettingLayoutRegistration(container)
-        }
-    }
-
-    private fun ensureInternalSettingAttachListener(overlay: View) {
-        val listener = synchronized(overlayStateLock) {
-            if (internalSettingAttachListeners.containsKey(overlay)) {
-                null
-            } else {
-                object : View.OnAttachStateChangeListener {
-                    override fun onViewAttachedToWindow(view: View) {
-                        reconcileInternalSettingOverlay(view)
-                    }
-
-                    override fun onViewDetachedFromWindow(view: View) {
-                        reconcileInternalSettingOverlay(view)
-                    }
-                }.also { internalSettingAttachListeners[overlay] = it }
-            }
-        } ?: return
-        overlay.addOnAttachStateChangeListener(listener)
-    }
-
-    private fun ensureInternalSettingLayoutRegistration(container: ViewGroup) {
-        // Keep this instance-scoped so host method obfuscation cannot affect close detection.
-        val observer = container.viewTreeObserver
-        if (!observer.isAlive) return
-        var previousRegistration: WeTypeGlobalLayoutRegistration? = null
-        val registration = synchronized(overlayStateLock) {
-            internalSettingLayoutRegistrations[container]?.let { current ->
-                if (current.observer.get() === observer) return@synchronized null
-                previousRegistration = current
-            }
-            val containerReference = WeakReference(container)
-            val listener = ViewTreeObserver.OnGlobalLayoutListener {
-                containerReference.get()?.let(::syncInternalSettingUnderlay)
-            }
-            WeTypeGlobalLayoutRegistration(WeakReference(observer), listener).also {
-                internalSettingLayoutRegistrations[container] = it
-            }
-        } ?: return
-        previousRegistration?.let { previous ->
-            previous.observer.get()?.takeIf { observer -> observer.isAlive }
-                ?.removeOnGlobalLayoutListener(previous.listener)
-        }
-        observer.addOnGlobalLayoutListener(registration.listener)
-    }
-
-    private fun removeInternalSettingLayoutRegistration(container: ViewGroup) {
-        val registration = synchronized(overlayStateLock) {
-            internalSettingLayoutRegistrations.remove(container)
-        } ?: return
-        registration.observer.get()?.takeIf { observer -> observer.isAlive }
-            ?.removeOnGlobalLayoutListener(registration.listener)
-    }
-
-    private fun removeAllInternalSettingLayoutRegistrations() {
-        val containers = synchronized(overlayStateLock) {
-            internalSettingLayoutRegistrations.keys.toList()
-        }
-        containers.forEach(::removeInternalSettingLayoutRegistration)
-    }
-
-    private fun restoreInternalSettingUnderlay(container: ViewGroup) {
-        val originals = synchronized(overlayStateLock) {
-            internalSettingUnderlayOriginalVisibilities.remove(container)
-                ?.entries
-                ?.toList()
-                .orEmpty()
-        }
-        originals.forEach { (underlay, visibility) ->
-            if (underlay.visibility == View.INVISIBLE) {
-                setOverlayManagedVisibility(underlay, visibility)
-            }
-        }
-    }
-
-    private fun restoreAllInternalSettingUnderlays(clearTrackedOverlays: Boolean) {
-        removeAllInternalSettingLayoutRegistrations()
-        val containers = synchronized(overlayStateLock) {
-            internalSettingUnderlayOriginalVisibilities.keys.toList()
-        }
-        containers.forEach(::restoreInternalSettingUnderlay)
-        if (clearTrackedOverlays) {
-            val listeners = synchronized(overlayStateLock) {
-                internalSettingAttachListeners.entries.map { (view, listener) -> view to listener }
-                    .also { internalSettingAttachListeners.clear() }
-            }
-            listeners.forEach { (view, listener) ->
-                view.removeOnAttachStateChangeListener(listener)
-            }
-            synchronized(overlayStateLock) {
-                internalSettingContainers.clear()
-                internalSettingContainerByOverlay.clear()
-                internalSettingSyncPosted.clear()
-            }
-        }
-    }
-
-    private fun resolveInternalSettingContainer(overlay: View): ViewGroup? {
-        val attachedContainer = (overlay.parent as? ViewGroup)?.takeIf {
-            hasAncestorClass(overlay, WETYPE_SETTINGS_KEYBOARD_CLASS_NAME)
-        }
-        if (attachedContainer != null) {
-            synchronized(overlayStateLock) {
-                internalSettingContainerByOverlay[overlay] = WeakReference(attachedContainer)
-            }
-            return attachedContainer
-        }
-        return synchronized(overlayStateLock) {
-            internalSettingContainerByOverlay[overlay]?.get()
-        }
-    }
-
-    private fun containsDescendantClass(root: View, className: String): Boolean {
-        if (root.javaClass.name == className) return true
-        if (root !is ViewGroup) return false
-        repeat(root.childCount) { index ->
-            if (containsDescendantClass(root.getChildAt(index), className)) return true
-        }
-        return false
-    }
-
-    private fun hasAncestorClass(view: View, className: String): Boolean {
-        var current = view.parent as? View
-        while (current != null) {
-            if (current.javaClass.name == className) return true
-            current = current.parent as? View
-        }
-        return false
-    }
-
-    private fun isWeTypeKeyboardRoot(view: View): Boolean =
-        weTypeKeyboardBaseClasses.any { keyboardBase -> keyboardBase.isInstance(view) }
-
-    private fun isWeTypeCandidateView(view: View): Boolean =
-        weTypeCandidateViewClass?.isInstance(view) == true
-
-    private fun findKeyboardBaseClass(overlayClass: Class<*>): Class<*> {
-        var candidate = overlayClass
-        while (true) {
-            val superclass = candidate.superclass ?: break
-            val superclassHasKeyboardType = superclass.methods.any { method ->
-                method.name == "getKeyboardType" && method.parameterCount == 0
-            }
-            if (!View::class.java.isAssignableFrom(superclass) || !superclassHasKeyboardType) break
-            candidate = superclass
-        }
-        check(
-            View::class.java.isAssignableFrom(candidate) &&
-                candidate != View::class.java &&
-                candidate != ViewGroup::class.java &&
-                candidate.methods.any { method ->
-                    method.name == "getKeyboardType" && method.parameterCount == 0
-                }
-        ) { "Invalid WeType keyboard base: ${candidate.name}" }
-        return candidate
-    }
-
-    private fun findOverlayKeyboardContainer(view: View): ViewGroup? {
-        val overlayHost = view.parent as? ViewGroup ?: return null
-        return overlayHost.parent as? ViewGroup
-    }
-
-    private fun isDescendantOf(view: View, ancestor: ViewGroup): Boolean {
-        var current: View? = view
-        while (current != null) {
-            if (current === ancestor) return true
-            current = current.parent as? View
-        }
-        return false
+        WeTypeOverlayCompositor.reconcile(rootViews)
     }
 
     fun hookWindowBlur() {
@@ -1085,13 +319,12 @@ internal object WeTypeWindowHooks {
                         hideBackgroundCarrier(state)
                         return@runCatching true
                     }
-                    val bounds = collectBackgroundBounds(service, latestDecorView, state)
-                    if (bounds == null) {
-                        // Never display a stale/full-window estimate while the host relayouts.
-                        hideBackgroundCarrier(state)
-                        return@runCatching true
+                    when (val update = collectBackgroundBounds(service, latestDecorView, state)) {
+                        WeTypeBackgroundUpdate.PendingLayout -> Unit
+                        WeTypeBackgroundUpdate.Hidden -> hideBackgroundCarrier(state)
+                        is WeTypeBackgroundUpdate.Ready ->
+                            applyBackgroundCarrier(window, latestDecorView, context, state, update.bounds)
                     }
-                    applyBackgroundCarrier(window, latestDecorView, context, state, bounds)
                     true
                 }.getOrElse {
                     Log.i("Failed: Apply WeType background before drawing")
@@ -1174,7 +407,7 @@ internal object WeTypeWindowHooks {
         inputMethodService: Any,
         decorView: View,
         state: WeTypeWindowState
-    ): WeTypeBackgroundBounds? {
+    ): WeTypeBackgroundUpdate {
         if (!state.inputViewMethodResolved) {
             // Current WeType versions expose only the framework input/candidate frames.
             // Cache a missing optional accessor too, instead of throwing on every layout.
@@ -1191,7 +424,7 @@ internal object WeTypeWindowHooks {
             readViewField(inputMethodService, "mInputFrame"),
             runCatching { state.inputViewMethod?.invoke(inputMethodService) as? View }.getOrNull()
         )
-        return resolveWeTypeBackgroundBounds(
+        return resolveWeTypeBackgroundUpdate(
             decorView.toBackgroundLayout(location),
             contentViews.map { it.toBackgroundLayout(location) }
         )
