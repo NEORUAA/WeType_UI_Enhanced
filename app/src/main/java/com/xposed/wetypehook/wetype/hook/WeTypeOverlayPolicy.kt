@@ -3,7 +3,7 @@ package com.xposed.wetypehook.wetype.hook
 import kotlin.math.roundToInt
 
 internal enum class WeTypeLayerRole {
-    Keyboard, Candidate, CandidateContent, SettingsNavigation, OverlayKeyboard, SettingsTools, SettingsPage
+    Keyboard, Candidate, CandidateContent, SettingsChrome, OverlayKeyboard, SettingsTools, SettingsPage
 }
 
 /** One frame's host-owned state. No previous visibility is saved or restored. */
@@ -29,31 +29,30 @@ internal fun resolveWeTypeDrawAlphas(
 ): Map<Int, Int> {
     val alphas = mutableMapOf<Int, Int>()
     val overlays = layers.filter { it.role == WeTypeLayerRole.OverlayKeyboard && it.rendered }
-    val navigation = layers.filter { it.role == WeTypeLayerRole.SettingsNavigation && it.rendered }
+    val chrome = layers.filter { it.role == WeTypeLayerRole.SettingsChrome && it.rendered }
     for (layer in layers) {
         if (!layer.rendered) continue
         if (layer.role == WeTypeLayerRole.Keyboard || layer.role == WeTypeLayerRole.Candidate ||
             layer.role == WeTypeLayerRole.CandidateContent || layer.role == WeTypeLayerRole.OverlayKeyboard) {
-            val coveringOverlays = overlays.filter { overlay ->
-                    overlay.id > layer.id && layer.id !in overlay.ancestors &&
-                        overlay.id !in layer.ancestors
-                }
-            val coveringOverlay = coveringOverlays.lastOrNull()
-            if (coveringOverlay != null) {
-                // Settings reuses the candidate bar's navigation. Preserve the bar's
-                // ancestors and navigation descendants; mask only disjoint content.
-                val sharedNavigation = coveringOverlay.settingsOwner != null &&
-                    (layer.role == WeTypeLayerRole.Candidate ||
-                        layer.role == WeTypeLayerRole.CandidateContent) && navigation.any {
+            // Settings chrome is shared with the candidate bar, but lives in
+            // multiple branches. Preserve each branch and its ancestors, never
+            // the ordinary candidate siblings. Other overlays still cover it.
+            val sharedChrome =
+                (layer.role == WeTypeLayerRole.Candidate ||
+                    layer.role == WeTypeLayerRole.CandidateContent) && chrome.any {
                         layer.id in it.ancestors || it.id in layer.ancestors
                     }
-                if (!sharedNavigation) {
-                    val transmission = coveringOverlays.fold(1f) { alpha, overlay ->
-                        alpha * (1f - overlay.opacity.coerceIn(0f, 1f))
-                    }
-                    val alpha = (255f * transmission).roundToInt()
-                    if (alpha < 255) alphas[layer.id] = alpha
+            val coveringOverlays = overlays.filter { overlay ->
+                overlay.id > layer.id && layer.id !in overlay.ancestors &&
+                    overlay.id !in layer.ancestors &&
+                    !(sharedChrome && overlay.settingsOwner != null)
+            }
+            if (coveringOverlays.isNotEmpty()) {
+                val transmission = coveringOverlays.fold(1f) { alpha, overlay ->
+                    alpha * (1f - overlay.opacity.coerceIn(0f, 1f))
                 }
+                val alpha = (255f * transmission).roundToInt()
+                if (alpha < 255) alphas[layer.id] = alpha
             }
         }
         if (layer.role == WeTypeLayerRole.SettingsTools) {
@@ -69,9 +68,15 @@ internal fun resolveWeTypeDrawAlphas(
             if (alpha < 255) alphas[layer.id] = alpha
         }
     }
-    // One transparent layer per covered branch is sufficient, even for a deep bar.
-    return layers.filter { it.id in alphas && it.ancestors.none(alphas::containsKey) }
-        .associate { it.id to alphas.getValue(it.id) }
+    // Targets above describe absolute transmission. A shared chrome ancestor can
+    // be partially covered while its candidate siblings must remain fully hidden.
+    // Keep stronger descendant masks, relative to the already applied ancestor.
+    return layers.mapNotNull { layer ->
+        val target = alphas[layer.id] ?: return@mapNotNull null
+        val inherited = layer.ancestors.mapNotNull(alphas::get).minOrNull() ?: 255
+        if (target >= inherited) null
+        else layer.id to (target * 255f / inherited).roundToInt()
+    }.toMap()
 }
 
 /** Keep the native draw call and animation bookkeeping, even for occluded content. */

@@ -78,6 +78,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -1573,6 +1574,7 @@ private fun IconShapePreferenceItem(
     onReset: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     // 设置界面也会以 ComponentDialog 形式渲染在宿主进程中，此时没有 ActivityResultRegistryOwner，
     // 文件选择改由宿主 Activity 发起，结果经 HostActivityResultBridge 回传。
     val registryOwner = LocalActivityResultRegistryOwner.current
@@ -1598,7 +1600,7 @@ private fun IconShapePreferenceItem(
         onValueChange(requireNotNull(text))
         Toast.makeText(
             context,
-            context.getString(R.string.settings_icon_shape_imported, paths.size),
+            resources.getString(R.string.settings_icon_shape_imported, paths.size),
             Toast.LENGTH_SHORT
         ).show()
     }

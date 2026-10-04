@@ -52,14 +52,17 @@ internal object WeTypeOverlayCompositor {
     private val settingsContentGetters = WeakHashMap<Class<*>, Method?>()
     private var settingsManager: Any? = null
     private var toolsRequestedGetter: Method? = null
-    private var settingsNavigationId: Int? = null
+    private var settingsChromeIds: Set<Int> = emptySet()
 
     fun install() {
         resolveSettingsStateReader()
-        settingsNavigationId = runCatching {
-            loadClassOrNull("com.tencent.wetype.plugin.hld.s")
-                ?.getDeclaredField("setting_container_rl")?.getInt(null)
-        }.getOrNull()
+        val resourceClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s")
+        // Host-owned chrome has two sibling branches: back/title and the lazily
+        // added settings toolbar (settings / file transfer). Neither is candidates.
+        settingsChromeIds = listOf("setting_container_rl", "setting_toolbar_recyclerview")
+            .mapNotNull { name ->
+                runCatching { resourceClass?.getDeclaredField(name)?.getInt(null) }.getOrNull()
+            }.toSet()
         runCatching {
             val drawChild = ViewGroup::class.java.getDeclaredMethod(
                 "drawChild", Canvas::class.java, View::class.java, Long::class.javaPrimitiveType
@@ -157,8 +160,8 @@ internal object WeTypeOverlayCompositor {
             val role = when {
                 name in OVERLAY_KEYBOARDS -> WeTypeLayerRole.OverlayKeyboard
                 name == CANDIDATE_VIEW -> WeTypeLayerRole.Candidate
-                candidateOwner != null && view.id == settingsNavigationId ->
-                    WeTypeLayerRole.SettingsNavigation
+                candidateOwner != null && view.id in settingsChromeIds ->
+                    WeTypeLayerRole.SettingsChrome
                 name in SETTINGS_PAGES -> WeTypeLayerRole.SettingsPage
                 owner != null && view is LinearLayout && containsSettingsRecycler(view) ->
                     WeTypeLayerRole.SettingsTools
@@ -285,6 +288,6 @@ internal object WeTypeOverlayCompositor {
         settingsContentGetters.clear()
         settingsManager = null
         toolsRequestedGetter = null
-        settingsNavigationId = null
+        settingsChromeIds = emptySet()
     }
 }

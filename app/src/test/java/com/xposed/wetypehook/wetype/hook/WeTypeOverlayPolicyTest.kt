@@ -7,6 +7,57 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class WeTypeOverlayPolicyTest {
+    // ImeCandidateView.M1 adds the right-hand settings toolbar at child index 0,
+    // outside setting_container_rl. Both are shared with S10SettingsKeyboard.
+    private fun settingsWithSiblingChrome() = listOf(
+        layer(1, WeTypeLayerRole.Candidate),
+        layer(2, WeTypeLayerRole.SettingsChrome, ancestors = listOf(1)),
+        layer(3, WeTypeLayerRole.CandidateContent, ancestors = listOf(1, 2)),
+        layer(4, WeTypeLayerRole.CandidateContent, ancestors = listOf(1, 2)),
+        layer(5, WeTypeLayerRole.SettingsChrome, ancestors = listOf(1)),
+        layer(6, WeTypeLayerRole.CandidateContent, ancestors = listOf(1, 5)),
+        layer(7, WeTypeLayerRole.CandidateContent, ancestors = listOf(1)),
+        layer(8, WeTypeLayerRole.OverlayKeyboard, owner = 8)
+    )
+
+    @Test
+    fun expandedToolsKeepBothSiblingChromeBranchesAndHideOnlyCandidates() {
+        assertEquals(mapOf(7 to 0), resolveWeTypeDrawAlphas(settingsWithSiblingChrome(), true))
+    }
+
+    @Test
+    fun rightToolbarRemainsVisibleEvenWhenHostHidesBackAndTitle() {
+        assertEquals(mapOf(7 to 0), resolveWeTypeDrawAlphas(settingsWithSiblingChrome().map {
+            if (it.id == 5 || it.id == 6) it.copy(rendered = false) else it
+        }, true))
+    }
+
+    @Test
+    fun sharedToolbarKeepsNativeSettingsCrossfadeAndPageSwitching() {
+        for (toolsRequested in listOf(true, false)) {
+            assertEquals(mapOf(7 to 128), resolveWeTypeDrawAlphas(settingsWithSiblingChrome().map {
+                if (it.id == 8) it.copy(opacity = 0.5f) else it
+            }, toolsRequested))
+        }
+    }
+
+    @Test
+    fun emojiCrossfadeCoversSharedChromeWhileSettingsStillHidesCandidateSiblings() {
+        val layers = settingsWithSiblingChrome() +
+            layer(9, WeTypeLayerRole.OverlayKeyboard).copy(opacity = 0.5f)
+        assertEquals(mapOf(1 to 128, 7 to 0, 8 to 128), resolveWeTypeDrawAlphas(layers, true))
+        assertEquals(mapOf(1 to 0, 8 to 0), resolveWeTypeDrawAlphas(layers.map {
+            if (it.id == 9) it.copy(opacity = 1f) else it
+        }, true))
+    }
+
+    @Test
+    fun hiddenSharedChromeDoesNotPreserveTheOldCandidateBar() {
+        assertEquals(mapOf(1 to 0), resolveWeTypeDrawAlphas(settingsWithSiblingChrome().map {
+            if (it.id in 2..6) it.copy(rendered = false) else it
+        }, true))
+    }
+
     @Test
     fun incomingAndOutgoingOverlayKeepEveryNativeCrossfadeStage() {
         val keyboard = layer(1, WeTypeLayerRole.Keyboard)
@@ -51,7 +102,7 @@ class WeTypeOverlayPolicyTest {
         layer(1, WeTypeLayerRole.Candidate),
         layer(2, WeTypeLayerRole.CandidateContent, ancestors = listOf(1)),
         layer(3, WeTypeLayerRole.CandidateContent, ancestors = listOf(1, 2)),
-        layer(4, WeTypeLayerRole.SettingsNavigation, ancestors = listOf(1, 2)),
+        layer(4, WeTypeLayerRole.SettingsChrome, ancestors = listOf(1, 2)),
         layer(5, WeTypeLayerRole.CandidateContent, ancestors = listOf(1, 2, 4)),
         layer(6, WeTypeLayerRole.CandidateContent, ancestors = listOf(1)),
         layer(7, WeTypeLayerRole.OverlayKeyboard, owner = 7)
@@ -71,7 +122,7 @@ class WeTypeOverlayPolicyTest {
     }
 
     @Test
-    fun hiddenSettingsNavigationDoesNotLeaveOldCandidateContentExposed() {
+    fun hiddenSettingsChromeDoesNotLeaveOldCandidateContentExposed() {
         assertEquals(setOf(1), resolveWeTypeDrawMasks(settingsWithSharedNavigation().map {
             if (it.id == 4) it.copy(rendered = false) else it
         }, false))
