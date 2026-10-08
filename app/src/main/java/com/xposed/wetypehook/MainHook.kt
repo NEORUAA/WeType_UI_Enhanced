@@ -253,7 +253,7 @@ class MainHook : XposedModule() {
         val isWeType = packageName == WETYPE_PACKAGE
 
         if (isWeType) {
-            installWeTypeHooks(packageName)
+            installWeTypeHooksWhenReady(packageName)
         }
 
         if (!isMiuiImeSupport) return
@@ -279,6 +279,38 @@ class MainHook : XposedModule() {
         }
 
         Log.i("Hook MIUI IME Done!")
+    }
+
+    private fun installWeTypeHooksWhenReady(sourcePackage: String) {
+        fun install(context: Context) {
+            if (context.packageName != sourcePackage) return
+            if (!installedHookTokens.add("wetype.application-ready")) return
+            // Tinker replaces Context/LoadedApk's loader during attachBaseContext. The loader
+            // supplied by onPackageReady still resolves the original APK's duplicate classes.
+            HookEnvironment.updateClassLoader(context.classLoader)
+            WeTypeSettings.ensureHostSnapshot(context)
+            installWeTypeHooks(sourcePackage)
+            Log.i("Success: Hook WeType with attached application class loader")
+        }
+        val application = runCatching {
+            Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentApplication")
+                .apply { isAccessible = true }
+                .invoke(null) as? Context
+        }.getOrNull()
+        if (application != null) {
+            // Hot reload does not replay Application.attach.
+            install(application)
+            return
+        }
+        HookEnvironment.withHookScope("wetype.application-ready") {
+            findMethod("android.app.Application") {
+                name == "attach" && parameterTypes.sameAs(Context::class.java)
+            }.hookAfter { param ->
+                val context = param.thisObject as? Context ?: return@hookAfter
+                install(context)
+            }
+        }
     }
 
     private fun installWeTypeHooks(sourcePackage: String) {
@@ -1091,8 +1123,7 @@ class MainHook : XposedModule() {
             .getDeclaredMethod("currentApplication")
             .apply { isAccessible = true }
             .invoke(null)
-            ?.javaClass
-            ?.classLoader
+            .let { (it as? Context)?.classLoader }
     }.getOrNull()
 
     private fun reinstallDynamicBottomManagerHooks(
