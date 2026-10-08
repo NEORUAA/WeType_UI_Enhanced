@@ -18,6 +18,8 @@ import android.widget.FrameLayout
 import com.xposed.wetypehook.wetype.settings.GlassMaterialOverrides
 import com.xposed.wetypehook.PropertyUtils
 import com.xposed.wetypehook.xposed.Log
+import com.xposed.wetypehook.xposed.HookEnvironment
+import com.xposed.wetypehook.xposed.hookBefore
 import java.lang.reflect.Method
 
 /** System View material used by XiaoAI IME 0.2.910's HyperMaterialHelper. */
@@ -300,6 +302,16 @@ internal class WeTypeHyperMaterial(
     }
 
     private class MaterialApi(offScreenFill: Boolean) {
+        private val passWindowBlurScope = PassWindowBlurScope()
+        private val modernAdmission by lazy {
+            val stubClass = Class.forName("android.view.ViewRootImplStub", true, View::class.java.classLoader)
+            val stub = checkNotNull(stubClass.getMethod("getInstance").invoke(null))
+            stub.javaClass.getMethod("isPassWindowBlurAllowed", String::class.java).hookBefore { param ->
+                if (passWindowBlurScope.allows(param.argumentOrNull(0) as? String)) param.result = true
+            }
+            true
+        }
+
         private val methods = buildMap<String, Method> {
             listOf("setMiBackgroundBlurMode", "setMiBackgroundBlurRadius", "setMiViewBlurMode", "setMiBackgroundBlurType")
                 .forEach { put(it, View::class.java.getMethod(it, Int::class.javaPrimitiveType)) }
@@ -322,13 +334,21 @@ internal class WeTypeHyperMaterial(
             val rootContext = root.javaClass.getDeclaredField("mContext").apply { isAccessible = true }
                 .get(root) as Context
             val packageName = Context::class.java.getMethod("getBasePackageName").invoke(rootContext) as String
-            // HyperOS rejects third-party pass-window sampling without throwing. Only
-            // admit this carrier's call on its own ViewRoot, then restore the ROM list.
-            // Never modify the static filter switch, system properties or cloud data.
+            // Older ROMs keep admission on the ViewRoot. Newer ROMs delegate to the
+            // framework stub; override only the synchronous call from this carrier,
+            // for this host package and thread. Keep ROM/cloud admission data intact.
             val needsAdmission = !originalFilter.isNullOrEmpty() && !originalFilter.contains(packageName)
             try {
                 if (needsAdmission) filterField?.set(root, "$originalFilter $packageName")
-                call(view, "setPassWindowBlurEnabled", enabled)
+                if (filterField == null && packageName == "com.tencent.wetype" &&
+                    HookEnvironment.moduleOrNull() != null) {
+                    check(modernAdmission)
+                    passWindowBlurScope.withPackage(packageName) {
+                        call(view, "setPassWindowBlurEnabled", enabled)
+                    }
+                } else {
+                    call(view, "setPassWindowBlurEnabled", enabled)
+                }
                 // The boolean return also means "already set", so inspect actual state.
                 val state = View::class.java.getDeclaredField("mNeedPassWindowBlur").apply { isAccessible = true }
                 check(state.getBoolean(view) == enabled) { "System rejected pass-window blur state" }
@@ -339,6 +359,23 @@ internal class WeTypeHyperMaterial(
 
         fun call(view: View, name: String, vararg args: Any) {
             methods.getValue(name).invoke(view, *args)
+        }
+    }
+}
+
+/** Admission must never leak to another package, call, or rendering thread. */
+internal class PassWindowBlurScope {
+    private val packageName = ThreadLocal<String>()
+
+    fun allows(candidate: String?): Boolean = candidate != null && candidate == packageName.get()
+
+    fun <T> withPackage(candidate: String, block: () -> T): T {
+        val previous = packageName.get()
+        packageName.set(candidate)
+        return try {
+            block()
+        } finally {
+            if (previous == null) packageName.remove() else packageName.set(previous)
         }
     }
 }
