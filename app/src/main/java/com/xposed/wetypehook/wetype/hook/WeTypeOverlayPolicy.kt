@@ -6,6 +6,12 @@ internal enum class WeTypeLayerRole {
     Keyboard, Candidate, CandidateContent, SettingsChrome, OverlayKeyboard, SettingsTools, SettingsPage
 }
 
+internal data class WeTypeLayerBounds(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+    fun intersects(other: WeTypeLayerBounds) =
+        maxOf(left, other.left) < minOf(right, other.right) &&
+            maxOf(top, other.top) < minOf(bottom, other.bottom)
+}
+
 /** One frame's host-owned state. No previous visibility is saved or restored. */
 internal data class WeTypeLayerSnapshot(
     val id: Int,
@@ -13,8 +19,13 @@ internal data class WeTypeLayerSnapshot(
     val ancestors: List<Int>,
     val rendered: Boolean,
     val settingsOwner: Int? = null,
-    val opacity: Float = 1f
+    val opacity: Float = 1f,
+    val bounds: WeTypeLayerBounds? = null
 )
+
+/** 坐标未知（null）时保留旧的绘制顺序判断。 */
+private fun occludes(overlay: WeTypeLayerBounds?, layer: WeTypeLayerBounds?) =
+    overlay == null || layer == null || overlay.intersects(layer)
 
 /** IDs follow the host tree's paint order, including sibling Z order. */
 internal fun resolveWeTypeDrawMasks(
@@ -45,6 +56,7 @@ internal fun resolveWeTypeDrawAlphas(
             val coveringOverlays = overlays.filter { overlay ->
                 overlay.id > layer.id && layer.id !in overlay.ancestors &&
                     overlay.id !in layer.ancestors &&
+                    occludes(overlay.bounds, layer.bounds) &&
                     !(sharedChrome && overlay.settingsOwner != null)
             }
             if (coveringOverlays.isNotEmpty()) {

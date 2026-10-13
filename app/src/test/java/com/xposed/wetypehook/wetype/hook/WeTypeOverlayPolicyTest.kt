@@ -1,6 +1,7 @@
 package com.xposed.wetypehook.wetype.hook
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -129,8 +130,9 @@ class WeTypeOverlayPolicyTest {
     }
 
     private fun layer(id: Int, role: WeTypeLayerRole, shown: Boolean = true,
-                      ancestors: List<Int> = emptyList(), owner: Int? = null) =
-        WeTypeLayerSnapshot(id, role, ancestors, shown, owner)
+                      ancestors: List<Int> = emptyList(), owner: Int? = null,
+                      bounds: WeTypeLayerBounds? = null) =
+        WeTypeLayerSnapshot(id, role, ancestors, shown, owner, bounds = bounds)
 
     @Test
     fun emojiAndSettingsOccludeBothKeysAndCandidateThroughoutExit() {
@@ -247,5 +249,47 @@ class WeTypeOverlayPolicyTest {
         assertSame(hostFailure, failure)
         assertEquals(1, draws)
         assertTrue(restored)
+    }
+
+    @Test
+    fun stackedOverlayDoesNotHideTheCandidateBarAboveIt() {
+        val bar = WeTypeLayerBounds(0, 0, 1080, 160)
+        val keys = WeTypeLayerBounds(0, 160, 1080, 829)
+        val layers = listOf(
+            layer(1, WeTypeLayerRole.Candidate, bounds = bar),
+            layer(2, WeTypeLayerRole.CandidateContent, ancestors = listOf(1),
+                bounds = WeTypeLayerBounds(0, 0, 162, 160)),
+            layer(3, WeTypeLayerRole.SettingsChrome, ancestors = listOf(1),
+                shown = false, bounds = bar),
+            layer(4, WeTypeLayerRole.OverlayKeyboard, owner = 4, bounds = keys)
+        )
+        assertEquals(emptyMap<Int, Int>(), resolveWeTypeDrawAlphas(layers, true))
+    }
+
+    @Test
+    fun overlappingOverlayStillHidesTheCandidateBar() {
+        val area = WeTypeLayerBounds(0, 0, 1080, 829)
+        val layers = listOf(
+            layer(1, WeTypeLayerRole.Candidate, bounds = area),
+            layer(2, WeTypeLayerRole.OverlayKeyboard, owner = 2, bounds = area)
+        )
+        assertEquals(mapOf(1 to 0), resolveWeTypeDrawAlphas(layers, true))
+    }
+
+    @Test
+    fun unknownBoundsKeepThePaintOrderBehaviour() {
+        val layers = listOf(
+            layer(1, WeTypeLayerRole.Candidate),
+            layer(2, WeTypeLayerRole.OverlayKeyboard, owner = 2)
+        )
+        assertEquals(mapOf(1 to 0), resolveWeTypeDrawAlphas(layers, true))
+    }
+
+    @Test
+    fun emptyBoundsNeverIntersect() {
+        val empty = WeTypeLayerBounds(10, 10, 10, 10)
+        val area = WeTypeLayerBounds(0, 0, 100, 100)
+        assertFalse(empty.intersects(area))
+        assertFalse(area.intersects(empty))
     }
 }
