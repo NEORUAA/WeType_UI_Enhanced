@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
@@ -39,6 +40,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 private const val WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX = 2
+private const val WETYPE_FLOATING_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.float."
 private const val WETYPE_HARDWARE_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.hardware."
 private val WETYPE_HARDWARE_VIEW_ID_NAMES = arrayOf(
     "hardware_keyboard_candidate_container_view",
@@ -111,12 +113,14 @@ internal object WeTypeWindowHooks {
     )
 
     private val weTypeWindowStates = WeakHashMap<Any, WeTypeWindowState>()
+    private val floatingBackgroundStates = WeakHashMap<ViewGroup, WeTypeWindowState>()
 
     fun prepareForHotReload(): Boolean {
         val states = synchronized(weTypeWindowStates) {
             weTypeWindowStates.values.toList()
         }
         val cleaned = runOnMainThreadBlocking {
+            WeTypeFloatingBackgrounds.clearAll()
             WeTypeOverlayCompositor.clearAll()
             states.forEach { state ->
                 state.windowVisible = false
@@ -139,9 +143,11 @@ internal object WeTypeWindowHooks {
 
     fun reconcileCurrentOverlayUnderlays(rootViews: List<View>) {
         WeTypeOverlayCompositor.reconcile(rootViews)
+        WeTypeFloatingBackgrounds.reconcile(rootViews)
     }
 
     fun hookWindowBlur() {
+        WeTypeFloatingBackgrounds.install(::applyFloatingBackground, ::removeFloatingBackground)
         runCatching {
             val inputMethodService = loadClassOrNull("android.inputmethodservice.InputMethodService")
                 ?: error("Failed to load InputMethodService")
@@ -475,10 +481,44 @@ internal object WeTypeWindowHooks {
             }
         }
 
+        applyBackgroundSurface(decorGroup, context, state, cornerRadii, bounds.top, backgroundHeight)
+    }
+
+    private fun applyFloatingBackground(root: ViewGroup, bounds: Rect, radius: Float) {
+        val state = floatingBackgroundStates.getOrPut(root) { WeTypeWindowState() }
+        val radii = WeTypeCornerRadii.uniform(radius)
+        // The native drawable's optical outline excludes its transparent shadow
+        // margins. Keep those margins out of the replacement material as well.
+        applyBackgroundSurface(root, root.context, state, radii,
+            bounds.top, bounds.height(), bounds.left, bounds.width())
+        if (state.stopMaterialObserver == null) {
+            val reference = WeakReference(root)
+            state.stopMaterialObserver = WeTypeHyperMaterial.observeAvailability(root.context) {
+                state.backgroundStyleDirty = true
+                reference.get()?.invalidate()
+            }
+        }
+    }
+
+    private fun removeFloatingBackground(root: ViewGroup) {
+        floatingBackgroundStates.remove(root)?.let(::removeBackgroundCarrier)
+    }
+
+    private fun applyBackgroundSurface(
+        parent: ViewGroup,
+        context: Context,
+        state: WeTypeWindowState,
+        cornerRadii: WeTypeCornerRadii,
+        top: Int,
+        height: Int,
+        left: Int = 0,
+        width: Int = parent.width
+    ) {
+        val settings = WeTypeSettings.readSnapshotXposed()
         val overrides = if (settings.hyperMaterialEnabled && WeTypeHyperMaterial.areGlassOverridesAvailable()) {
             settings.glassOverrides
         } else GlassMaterialOverrides()
-        val carrier = ensureBackgroundCarrier(context, decorGroup, state, overrides)
+        val carrier = ensureBackgroundCarrier(context, parent, state, overrides)
         carrier.visibility = View.VISIBLE
         val style = BackgroundStyle(
             color = if (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
@@ -490,7 +530,9 @@ internal object WeTypeWindowHooks {
             nightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
             density = context.resources.displayMetrics.density,
             hyperMaterialEnabled = settings.hyperMaterialEnabled,
-            hyperMaterialAvailable = WeTypeHyperMaterial.isAvailable(context)
+            hyperMaterialAvailable = if (state.backgroundStyleDirty || state.backgroundStyle == null) {
+                WeTypeHyperMaterial.isAvailable(context)
+            } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable
         )
         val viewRoot = if (state.backgroundStyleDirty || carrier.background == null) {
             runCatching { carrier.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull()
@@ -517,12 +559,12 @@ internal object WeTypeWindowHooks {
         state.backgroundStyleDirty = false
         // This decorative child keeps a zero-height layout spec. Its rendered bounds must
         // not feed back into the IME's measurement or the app-facing inset calculation.
-        if (carrier.width != decorView.width || carrier.height != backgroundHeight || carrier.top != bounds.top) {
+        if (carrier.width != width || carrier.height != height || carrier.left != left || carrier.top != top) {
             carrier.measure(
-                View.MeasureSpec.makeMeasureSpec(decorView.width, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(backgroundHeight, View.MeasureSpec.EXACTLY)
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
             )
-            carrier.layout(0, bounds.top, decorView.width, bounds.top + backgroundHeight)
+            carrier.layout(left, top, left + width, top + height)
             carrier.invalidateOutline()
         }
         if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(cornerRadii)
@@ -571,13 +613,16 @@ internal object WeTypeWindowHooks {
         if (collapsedByInsets) return true
 
         // The input view is already a descendant of decor; do not scan it twice.
-        return containsWeTypeHardwareView(decorView, state)
+        // Floating keys live in their own PopupWindow; the service only keeps a
+        // small proxy view and must not receive a second, full-width material.
+        return containsWeTypeDetachedKeyboardView(decorView, state)
     }
 
-    private fun containsWeTypeHardwareView(view: View, state: WeTypeWindowState): Boolean {
+    private fun containsWeTypeDetachedKeyboardView(view: View, state: WeTypeWindowState): Boolean {
         if (view.visibility != View.VISIBLE) return false
         val className = view.javaClass.name
-        if (className.startsWith(WETYPE_HARDWARE_VIEW_CLASS_PREFIX)) return true
+        if (className.startsWith(WETYPE_HARDWARE_VIEW_CLASS_PREFIX) ||
+            className.startsWith(WETYPE_FLOATING_VIEW_CLASS_PREFIX)) return true
 
         val hardwareViewIds = state.hardwareViewIds ?: resolveHardwareViewIds(view.context)
             .also { state.hardwareViewIds = it }
@@ -585,7 +630,7 @@ internal object WeTypeWindowHooks {
 
         val group = view as? ViewGroup ?: return false
         for (index in 0 until group.childCount) {
-            if (containsWeTypeHardwareView(group.getChildAt(index), state)) return true
+            if (containsWeTypeDetachedKeyboardView(group.getChildAt(index), state)) return true
         }
         return false
     }
