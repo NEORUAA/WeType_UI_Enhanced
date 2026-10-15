@@ -147,7 +147,7 @@ internal object WeTypeOverlayCompositor {
         val views = mutableMapOf<Int, View>()
         var nextId = 0
         fun visit(view: View, ancestors: List<Int>, parentRendered: Boolean, settingsOwner: Int?,
-                  candidateOwner: Int?, parentOpacity: Float) {
+                  candidateOwner: Int?, parentOpacity: Float, offsetX: Int, offsetY: Int) {
             val id = nextId++
             val rendered = parentRendered && view.isAttachedToWindow &&
                 (view.visibility == View.VISIBLE || view.animation?.hasEnded() == false) &&
@@ -157,6 +157,8 @@ internal object WeTypeOverlayCompositor {
             val owner = if (name == SETTINGS_KEYBOARD) id else settingsOwner
             val candidate = if (name == CANDIDATE_VIEW) id else candidateOwner
             val effectiveOpacity = parentOpacity * view.alpha
+            val left = offsetX + view.left
+            val top = offsetY + view.top
             val role = when {
                 name in OVERLAY_KEYBOARDS -> WeTypeLayerRole.OverlayKeyboard
                 name == CANDIDATE_VIEW -> WeTypeLayerRole.Candidate
@@ -179,18 +181,21 @@ internal object WeTypeOverlayCompositor {
                     val content = runCatching { getter?.invoke(view) as? View }.getOrNull()
                     view.alpha * (content?.alpha ?: 1f)
                 } else effectiveOpacity
-                layers += WeTypeLayerSnapshot(id, role, ancestors, rendered, owner, opacity)
+                layers += WeTypeLayerSnapshot(
+                    id, role, ancestors, rendered, owner, opacity,
+                    WeTypeLayerBounds(left, top, left + view.width, top + view.height)
+                )
                 views[id] = view
             }
             if (view is ViewGroup) {
                 // The host's keyboard containers use standard child order. Z is applied
                 // before index, matching the framework's stable preordered child list.
                 (0 until view.childCount).map(view::getChildAt).sortedBy { it.z }.forEach {
-                    visit(it, ancestors + id, rendered, owner, candidate, effectiveOpacity)
+                    visit(it, ancestors + id, rendered, owner, candidate, effectiveOpacity, left, top)
                 }
             }
         }
-        visit(decor, emptyList(), decor.isShown, null, null, 1f)
+        visit(decor, emptyList(), decor.isShown, null, null, 1f, 0, 0)
         val toolsRequested = runCatching {
             toolsRequestedGetter?.invoke(settingsManager) as? Boolean
         }.getOrNull()
