@@ -51,6 +51,9 @@
 
     <string name="settings_disable_hot_update_title">禁用热更新</string>
     <string name="settings_disable_hot_update_desc">阻止微信输入法热修复</string>
+    <string name="settings_hide_launcher_icon_title">隐藏桌面图标</string>
+    <string name="settings_hide_launcher_icon_desc">立即生效。隐藏后可从 LSPosed 打开设置，或在拨号盘输入 *#*#%1$s#*#*。MIUI/HyperOS 使用拨号入口需允许本模块在后台弹出界面。</string>
+    <string name="settings_launcher_icon_failed">无法读取或更改桌面图标状态，请重新打开此页面后重试。</string>
 
     <string name="settings_preview_title">效果预览</string>
     <string name="settings_preview_mode_light">浅色模式</string>

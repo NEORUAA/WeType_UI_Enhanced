@@ -51,6 +51,9 @@
 
     <string name="settings_disable_hot_update_title">Disable hot update</string>
     <string name="settings_disable_hot_update_desc">Block WeType hotfix updates</string>
+    <string name="settings_hide_launcher_icon_title">Hide launcher icon</string>
+    <string name="settings_hide_launcher_icon_desc">Applies immediately. Open settings from LSPosed or enter *#*#%1$s#*#* in the dialer. On MIUI/HyperOS, allow this module to open windows in the background to use the dialer shortcut.</string>
+    <string name="settings_launcher_icon_failed">Could not access the launcher icon setting. Please reopen this page and try again.</string>
 
     <string name="settings_preview_title">Effect preview</string>
     <string name="settings_preview_mode_light">Light mode</string>

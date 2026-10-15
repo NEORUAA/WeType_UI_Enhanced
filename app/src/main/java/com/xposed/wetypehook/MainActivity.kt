@@ -210,15 +210,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openEmbeddedWeTypeSettings(): Boolean {
+        val launchFlags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+            Intent.FLAG_ACTIVITY_SINGLE_TOP
         val launchIntents = listOfNotNull(
             packageManager.getLaunchIntentForPackage("com.tencent.wetype")?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(launchFlags)
                 putExtra(EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS, true)
             },
             Intent(Intent.ACTION_MAIN).apply {
                 setPackage("com.tencent.wetype")
                 addCategory(Intent.CATEGORY_LAUNCHER)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(launchFlags)
                 putExtra(EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS, true)
             },
             Intent().apply {
@@ -226,7 +228,7 @@ class MainActivity : ComponentActivity() {
                     "com.tencent.wetype",
                     "com.tencent.wetype.plugin.hld.ui.ImeAboutActivity"
                 )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(launchFlags)
                 putExtra(EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS, true)
             }
         )
@@ -433,6 +435,39 @@ private fun WeTypeSettingsScreen(
         (context.applicationContext ?: context).packageName != "com.xposed.wetypehook"
     }
     val snapshot = remember(preferencesContext) { WeTypeSettings.readSnapshot(preferencesContext) }
+    val hostActivity = remember(preferencesContext) { preferencesContext.findHostActivity() }
+    var launcherIconHidden by remember(hostActivity) { mutableStateOf<Boolean?>(null) }
+    var launcherIconRequestCode by remember(hostActivity) { mutableStateOf<Int?>(null) }
+
+    fun requestLauncherIcon(hidden: Boolean? = null, onSuccess: (() -> Unit)? = null) {
+        if (launcherIconRequestCode != null) return
+        val activity = hostActivity ?: return
+        val requestCode = HostActivityResultBridge.registerResult { resultCode, data ->
+            launcherIconRequestCode = null
+            if (resultCode == Activity.RESULT_OK && data?.hasExtra(LauncherIconContract.EXTRA_HIDDEN) == true) {
+                launcherIconHidden = data.getBooleanExtra(LauncherIconContract.EXTRA_HIDDEN, false)
+                onSuccess?.invoke()
+            } else {
+                Toast.makeText(context, R.string.settings_launcher_icon_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+        launcherIconRequestCode = requestCode
+        runCatching {
+            // The setting stays in the host; only PackageManager work runs in the module.
+            activity.startActivityForResult(LauncherIconContract.intent(hidden), requestCode)
+        }.onFailure {
+            HostActivityResultBridge.dispatch(requestCode, Activity.RESULT_CANCELED, null)
+        }
+    }
+
+    LaunchedEffect(hostActivity) {
+        requestLauncherIcon()
+    }
+    DisposableEffect(hostActivity) {
+        onDispose {
+            launcherIconRequestCode?.let(HostActivityResultBridge::unregister)
+        }
+    }
     var activationStatus by remember(preferencesContext) {
         mutableStateOf(ModuleActivationTracker.resolveStatusForUi(preferencesContext))
     }
@@ -607,7 +642,13 @@ private fun WeTypeSettingsScreen(
             appearanceGroupColors[index] = group.defaultColor
         }
         syncEditorFromState()
-        saveSettings(successMessage = R.string.settings_reset_toast, glassOverridesToSave = GlassMaterialOverrides())
+        if (launcherIconHidden != false) {
+            requestLauncherIcon(hidden = false) {
+                saveSettings(successMessage = R.string.settings_reset_toast, glassOverridesToSave = GlassMaterialOverrides())
+            }
+        } else {
+            saveSettings(successMessage = R.string.settings_reset_toast, glassOverridesToSave = GlassMaterialOverrides())
+        }
     }
 
     if (isEmbeddedHost) {
@@ -973,6 +1014,17 @@ private fun WeTypeSettingsScreen(
                             checked = disableHotUpdate,
                             onCheckedChange = { disableHotUpdate = it }
                         )
+                        HorizontalDivider()
+                        MiuixSwitchWidget(
+                            title = stringResource(R.string.settings_hide_launcher_icon_title),
+                            description = stringResource(
+                                R.string.settings_hide_launcher_icon_desc,
+                                SecretCodeReceiver.SECRET_CODE
+                            ),
+                            checked = launcherIconHidden == true,
+                            enabled = launcherIconHidden != null && launcherIconRequestCode == null,
+                            onCheckedChange = { requestLauncherIcon(it) }
+                        )
                     }
                 }
             }
@@ -990,6 +1042,7 @@ private fun WeTypeSettingsScreen(
                         ArrowPreference(
                             title = stringResource(R.string.settings_reset_title),
                             summary = stringResource(R.string.settings_reset_desc),
+                            enabled = launcherIconRequestCode == null,
                             onClick = ::restoreDefaults
                         )
 

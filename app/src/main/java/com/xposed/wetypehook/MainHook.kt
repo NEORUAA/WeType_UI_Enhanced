@@ -730,6 +730,15 @@ class MainHook : XposedModule() {
     private fun hookWeTypeIntentEntry() {
         runCatching {
             findMethod("android.app.Activity") {
+                name == "onNewIntent" && parameterTypes.contentEquals(arrayOf(Intent::class.java))
+            }.hookAfter { param ->
+                val activity = param.thisObject as? Activity ?: return@hookAfter
+                val intent = param.args[0] as? Intent ?: return@hookAfter
+                if (intent.getBooleanExtra(EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS, false)) {
+                    activity.intent = intent
+                }
+            }
+            findMethod("android.app.Activity") {
                 name == "onResume" && parameterTypes.isEmpty()
             }.hookAfter { param ->
                 val activity = param.thisObject as? Activity ?: return@hookAfter
