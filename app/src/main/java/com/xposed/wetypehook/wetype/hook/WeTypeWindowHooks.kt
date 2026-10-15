@@ -114,12 +114,22 @@ internal object WeTypeWindowHooks {
 
     private val weTypeWindowStates = WeakHashMap<Any, WeTypeWindowState>()
     private val floatingBackgroundStates = WeakHashMap<ViewGroup, WeTypeWindowState>()
+    private var miuiClipboardVisibilityProvider: (() -> Boolean)? = null
+
+    fun setMiuiClipboardVisibilityProvider(provider: () -> Boolean) {
+        miuiClipboardVisibilityProvider = provider
+    }
+
+    fun isMiuiClipboardActive(): Boolean = runCatching {
+        miuiClipboardVisibilityProvider?.invoke() == true
+    }.getOrDefault(false)
 
     fun prepareForHotReload(): Boolean {
         val states = synchronized(weTypeWindowStates) {
             weTypeWindowStates.values.toList()
         }
         val cleaned = runOnMainThreadBlocking {
+            miuiClipboardVisibilityProvider = null
             WeTypeFloatingBackgrounds.clearAll()
             WeTypeOverlayCompositor.clearAll()
             states.forEach { state ->
@@ -240,8 +250,25 @@ internal object WeTypeWindowHooks {
             val rootHeight = window.decorView.rootView?.height?.takeIf { it > 0 }
                 ?: window.decorView.height.takeIf { it > 0 }
                 ?: return@runCatching
-            val visibleTopInsets = insets?.visibleTopInsets ?: return@runCatching
-            val visibleImeHeight = (rootHeight - visibleTopInsets).coerceAtLeast(0)
+            insets ?: return@runCatching
+            if (rootHeight - insets.visibleTopInsets <= WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX &&
+                state.windowVisible && isMiuiClipboardActive()
+            ) {
+                val inputFrame = readViewField(inputMethodService, "mInputFrame")
+                if (inputFrame?.visibility == View.INVISIBLE && inputFrame.isAttachedToWindow &&
+                    inputFrame.isLaidOut && inputFrame.height > 0
+                ) {
+                    // MIUI hides only the keys. Keep the visible and touchable IME area
+                    // at its real frame so the system bottom bar does not collapse too.
+                    inputFrame.getLocationInWindow(state.locationBuffer)
+                    val top = state.locationBuffer[1]
+                    if (top in 0 until rootHeight) {
+                        insets.contentTopInsets = minOf(insets.contentTopInsets, top)
+                        insets.visibleTopInsets = top
+                    }
+                }
+            }
+            val visibleImeHeight = (rootHeight - insets.visibleTopInsets).coerceAtLeast(0)
             val previousVisibleImeHeight = state.computedVisibleImeHeightPx
             state.computedVisibleImeHeightPx = visibleImeHeight
 
@@ -425,14 +452,24 @@ internal object WeTypeWindowHooks {
             state.inputViewMethodResolved = true
         }
         val location = state.locationBuffer
+        val inputFrame = readViewField(inputMethodService, "mInputFrame")
+        val clipboardShowing = isMiuiClipboardActive()
         val contentViews = listOfNotNull(
             readViewField(inputMethodService, "mCandidatesFrame"),
-            readViewField(inputMethodService, "mInputFrame"),
+            inputFrame,
             runCatching { state.inputViewMethod?.invoke(inputMethodService) as? View }.getOrNull()
         )
         return resolveWeTypeBackgroundUpdate(
             decorView.toBackgroundLayout(location),
-            contentViews.map { it.toBackgroundLayout(location) }
+            contentViews.map { view ->
+                // MIUI hides the keys while its transparent clipboard popup is open.
+                // Keep their frame geometry so the separate material carrier stays visible.
+                view.toBackgroundLayout(location).let { layout ->
+                    if (clipboardShowing && view === inputFrame && view.visibility == View.INVISIBLE) {
+                        layout.copy(isShown = true)
+                    } else layout
+                }
+            }
         )
     }
 
@@ -610,7 +647,7 @@ internal object WeTypeWindowHooks {
     ): Boolean {
         val collapsedByInsets = state.computedVisibleImeHeightPx
             ?.let { it <= WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX } == true
-        if (collapsedByInsets) return true
+        if (collapsedByInsets && !isMiuiClipboardActive()) return true
 
         // The input view is already a descendant of decor; do not scan it twice.
         // Floating keys live in their own PopupWindow; the service only keeps a
