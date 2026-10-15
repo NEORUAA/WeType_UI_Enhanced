@@ -13,8 +13,8 @@ android {
         applicationId = "com.xposed.wetypehook"
         minSdk = 31
         targetSdk = 37
-        versionCode = 35
-        versionName = "1.28.0"
+        versionCode = 37
+        versionName = "1.28.5"
     }
 
     buildTypes {
@@ -65,13 +65,13 @@ dependencies {
     implementation("androidx.compose.ui:ui-android:1.12.1")
     implementation("androidx.compose.ui:ui-graphics-android:1.12.1")
     implementation("androidx.compose.ui:ui-text-android:1.12.1")
-    implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.3")
-    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.3")
-    implementation("top.yukonga.miuix.kmp:miuix-core-android:0.9.3")
+    implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4")
+    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.4")
+    implementation("top.yukonga.miuix.kmp:miuix-core-android:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-shapes-android:0.9.0")
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.0") {
         exclude(group = "top.yukonga.miuix.kmp", module = "miuix-android")
     }
     implementation("io.github.kyant0:capsule:2.1.3")
-    implementation("org.luckypray:dexkit:2.2.0")
+    implementation("org.luckypray:dexkit:2.3.0")
 }
