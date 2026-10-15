@@ -7,6 +7,7 @@ import android.content.res.AssetManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.Rect
 import android.inputmethodservice.InputMethodService
 import android.os.Binder
 import android.os.Bundle
@@ -98,6 +99,14 @@ class MainHook : XposedModule() {
     private data class FullscreenAreaLayout(val height: Int, val weight: Float)
     private val originalFullscreenAreaLayouts = WeakHashMap<ViewGroup, FullscreenAreaLayout>()
     private val adjustedImeContentViews = WeakHashMap<ViewGroup, WeakReference<View>>()
+    private data class BottomIconTranslation(var original: Float, var applied: Float)
+    private val bottomIconTranslations = WeakHashMap<View, BottomIconTranslation>()
+    private data class KeyboardGeometryAccess(
+        val keys: Field,
+        val drawRect: Method,
+        val visible: Method
+    )
+    private val keyboardGeometryAccess = mutableMapOf<Class<*>, KeyboardGeometryAccess?>()
     private val miuiBottomFrameViews = WeakHashMap<
         ViewGroup,
         Triple<WeakReference<ViewGroup>, WeakReference<View>, WeakReference<View>>
@@ -467,14 +476,23 @@ class MainHook : XposedModule() {
         val token = "miuiBottomRootMeasurement"
         if (!installedHookTokens.add(token)) return
         runCatching {
-            findMethod("com.android.internal.policy.DecorView") {
+            val measure = findMethod("com.android.internal.policy.DecorView") {
                 name == "onMeasure" && parameterTypes.sameAs(Int::class.java, Int::class.java)
-            }.hookBefore { param ->
+            }
+            measure.hookBefore { param ->
                 val inputFrame = imeInputFramesByDecor[param.thisObject]?.get() ?: return@hookBefore
                 // Normalize before the window measures either sibling. Doing this after
                 // layout exposes an unadjusted IME height until the next traversal.
                 // One window-level hook also avoids intercepting each child measurement.
                 reconcileMiuiBottomFrame(inputFrame)
+            }
+            findMethod("com.android.internal.policy.DecorView") {
+                name == "onLayout" && parameterTypes.sameAs(
+                    Boolean::class.java, Int::class.java, Int::class.java, Int::class.java, Int::class.java
+                )
+            }.hookAfter { param ->
+                val inputFrame = imeInputFramesByDecor[param.thisObject]?.get() ?: return@hookAfter
+                reconcileMiuiBottomIcons(inputFrame)
             }
         }.onFailure {
             installedHookTokens.remove(token)
@@ -498,7 +516,119 @@ class MainHook : XposedModule() {
         }
         val inputFrames = currentInputFrame?.let(::listOf)
             ?: miuiBottomFrameViews.keys.toList()
-        inputFrames.forEach(::reconcileMiuiBottomFrame)
+        inputFrames.forEach { inputFrame ->
+            reconcileMiuiBottomFrame(inputFrame)
+            reconcileMiuiBottomIcons(inputFrame)
+        }
+    }
+
+    private fun reconcileMiuiBottomIcons(inputFrame: ViewGroup) {
+        if (inputFrame.context.packageName != WETYPE_PACKAGE) return
+        val bottomArea = miuiBottomFrameViews[inputFrame]?.third?.get() ?: return
+        val padding = if (inputFrame.visibility == View.VISIBLE && bottomArea.visibility == View.VISIBLE) {
+            resolveWeTypeKeyBottomPadding(inputFrame)
+        } else 0
+
+        val icons = mutableListOf<View>()
+        fun collect(view: View) {
+            if (view is android.widget.ImageView && view.id != View.NO_ID) {
+                val name = runCatching { view.resources.getResourceName(view.id) }.getOrNull()
+                if (name == "com.miui.phrase:id/input_bottom_button_left" ||
+                    name == "com.miui.phrase:id/input_bottom_button_right"
+                ) icons += view
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) collect(view.getChildAt(index))
+            }
+        }
+        if (padding > 0) collect(bottomArea)
+        bottomIconTranslations.keys.toList().filterNot(icons::contains).forEach(::restoreMiuiBottomIcon)
+        icons.forEach { icon ->
+            val translation = bottomIconTranslations.getOrPut(icon) {
+                BottomIconTranslation(icon.translationY, icon.translationY)
+            }
+            if (icon.translationY != translation.applied) translation.original = icon.translationY
+            val target = translation.original - padding / 2f
+            translation.applied = target
+            if (icon.translationY != target) {
+                icon.translationY = target
+            }
+        }
+    }
+
+    private fun resolveWeTypeKeyBottomPadding(inputFrame: ViewGroup): Int {
+        // Self-drawn keys keep their padding inside drawRect, not View.paddingBottom.
+        var bottom = 0
+        fun collect(view: View) {
+            if (view.visibility != View.VISIBLE) return
+            if (view.javaClass.name.startsWith("com.tencent.wetype.plugin.hld.")) {
+                val access = resolveKeyboardGeometryAccess(view.javaClass)
+                if (access != null) runCatching {
+                    val keys = access.keys.get(view) as? Map<*, *> ?: return@runCatching
+                    val keyBottom = keys.values.maxOfOrNull { key ->
+                        if (key == null || access.visible.invoke(key) != true) return@maxOfOrNull 0
+                        val rect = access.drawRect.invoke(key) as? Rect ?: return@maxOfOrNull 0
+                        if (rect.isEmpty || rect.top < 0 || rect.bottom > view.height) 0 else rect.bottom
+                    } ?: 0
+                    if (keyBottom > 0) {
+                        val bounds = Rect(0, 0, view.width, keyBottom)
+                        inputFrame.offsetDescendantRectToMyCoords(view, bounds)
+                        bottom = maxOf(bottom, bounds.bottom)
+                    }
+                }
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) collect(view.getChildAt(index))
+            }
+        }
+        collect(inputFrame)
+        return if (bottom > 0) (inputFrame.height - bottom).coerceAtLeast(0) else 0
+    }
+
+    private fun resolveKeyboardGeometryAccess(type: Class<*>): KeyboardGeometryAccess? {
+        if (keyboardGeometryAccess.containsKey(type)) return keyboardGeometryAccess[type]
+        val access = runCatching {
+            // The public accessor identifies the self-draw base class across host versions.
+            val owner = type.getMethod("getActionButton").declaringClass
+            val metadata = kotlinMetadataStrings(owner)
+            val index = metadata.indexOf("imeButtonMap")
+            if (index < 1) return@runCatching null
+            val keys = owner.getDeclaredField(metadata[index - 1])
+                .takeIf { Map::class.java.isAssignableFrom(it.type) } ?: return@runCatching null
+            val keyType = owner.getMethod("getActionButton").returnType
+            val drawRect = resolveKeyPropertyGetter(keyType, "drawRect", Rect::class.java)
+                ?: return@runCatching null
+            val visible = resolveKeyPropertyGetter(keyType, "isVisible", Boolean::class.javaPrimitiveType!!)
+                ?: return@runCatching null
+            keys.isAccessible = true
+            KeyboardGeometryAccess(keys, drawRect, visible)
+        }.getOrNull()
+        keyboardGeometryAccess[type] = access
+        return access
+    }
+
+    private fun resolveKeyPropertyGetter(type: Class<*>, property: String, resultType: Class<*>): Method? {
+        val metadata = kotlinMetadataStrings(type)
+        val index = metadata.indexOf(property)
+        if (index < 0) return null
+        return (index - 1 downTo maxOf(0, index - 4)).firstNotNullOfOrNull { offset ->
+            type.declaredMethods.firstOrNull {
+                it.name == metadata[offset] && it.parameterTypes.isEmpty() && it.returnType == resultType
+            }
+        }?.apply { isAccessible = true }
+    }
+
+    private fun kotlinMetadataStrings(type: Class<*>): Array<String> {
+        val metadata = type.declaredAnnotations.firstOrNull {
+            it.annotationClass.java.name == "kotlin.Metadata"
+        } ?: return emptyArray()
+        @Suppress("UNCHECKED_CAST")
+        return metadata.annotationClass.java.getMethod("d2").invoke(metadata) as Array<String>
+    }
+
+    private fun restoreMiuiBottomIcon(icon: View) {
+        val translation = bottomIconTranslations.remove(icon) ?: return
+        if (icon.translationY == translation.applied) icon.translationY = translation.original
     }
 
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
@@ -1240,6 +1370,8 @@ class MainHook : XposedModule() {
     }.getOrDefault(emptyList())
 
     private fun cleanupExternalState(): Boolean = runOnMainThreadBlocking {
+        bottomIconTranslations.keys.toList().forEach(::restoreMiuiBottomIcon)
+        keyboardGeometryAccess.clear()
         miuiBottomFrameViews.forEach { (inputFrame, frameViews) ->
             frameViews.first.get()?.let { fullscreenArea ->
                 restoreMiuiBottomFrame(inputFrame, fullscreenArea)
