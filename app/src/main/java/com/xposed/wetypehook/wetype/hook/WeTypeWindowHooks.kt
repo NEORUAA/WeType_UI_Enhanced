@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.SurfaceTexture
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
@@ -36,8 +38,10 @@ import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 import java.lang.ref.WeakReference
 import java.lang.reflect.Method
 import java.util.WeakHashMap
+import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX = 2
 private const val WETYPE_FLOATING_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.float."
@@ -99,6 +103,10 @@ internal object WeTypeWindowHooks {
         var backgroundStyleDirty: Boolean = true,
         var backgroundStyle: BackgroundStyle? = null,
         var backgroundViewRoot: Any? = null,
+        val backgroundBounds: Rect = Rect(),
+        var awaitingBackgroundTexture: Boolean = false,
+        var backgroundTextureWaiter: BackgroundTextureWaiter? = null,
+        var startupFill: ColorDrawable? = null,
         var transparentWindowBackground: Drawable? = null,
         val locationBuffer: IntArray = IntArray(2),
         var inputViewMethodResolved: Boolean = false,
@@ -112,6 +120,20 @@ internal object WeTypeWindowHooks {
         var originalWindowBlurRadius: Int? = null
     )
 
+    private class BackgroundTextureWaiter(
+        state: WeTypeWindowState,
+        viewRoot: Any,
+        val listener: Any
+    ) {
+        val state = WeakReference(state)
+        val viewRoot = WeakReference(viewRoot)
+        val dispatchPending = AtomicBoolean(false)
+        @Volatile var readyTexture: SurfaceTexture? = null
+    }
+
+    private val backgroundTextureWaiters = IdentityHashMap<Any, BackgroundTextureWaiter>()
+    private val hookedTextureListeners = HashSet<Method>()
+    @Volatile private var hasBackgroundTextureWaiters = false
     private val weTypeWindowStates = WeakHashMap<Any, WeTypeWindowState>()
     private val floatingBackgroundStates = WeakHashMap<ViewGroup, WeTypeWindowState>()
     private var miuiClipboardVisibilityProvider: (() -> Boolean)? = null
@@ -293,6 +315,7 @@ internal object WeTypeWindowHooks {
                     state.computedVisibleImeHeightPx = null
                 }
                 "onWindowShown" -> {
+                    if (!state.windowVisible) prepareBackgroundShow(state)
                     state.windowVisible = true
                     state.computedVisibleImeHeightPx = null
                 }
@@ -306,6 +329,105 @@ internal object WeTypeWindowHooks {
             Log.i("Failed: Handle WeType window stage")
             Log.i(it)
         }
+    }
+
+    private fun prepareBackgroundShow(state: WeTypeWindowState) {
+        cancelBackgroundTextureWait(state)
+        state.awaitingBackgroundTexture = true
+        val carrier = state.backgroundCarrier ?: return
+        val style = state.backgroundStyle ?: return
+        if (!style.hyperMaterialEnabled) return
+        val viewRoot = runCatching { carrier.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull() ?: return
+        if (awaitBackgroundTexture(state, viewRoot)) applyStartupFill(state, style)
+    }
+
+    private fun awaitBackgroundTexture(state: WeTypeWindowState, viewRoot: Any): Boolean {
+        if (state.backgroundTextureWaiter?.viewRoot?.get() === viewRoot) return true
+        return runCatching {
+            val listener = checkNotNull(viewRoot.getObjectAs<Any>("mUpdateListener"))
+            val method = listener.javaClass.getMethod("onFrameAvailable", SurfaceTexture::class.java)
+            if (method !in hookedTextureListeners) {
+                HookEnvironment.registerHook(method, "wetype-background-texture") { chain ->
+                    // The steady-state callback does not allocate or inspect any views.
+                    if (!hasBackgroundTextureWaiters) return@registerHook chain.proceed()
+                    val result = chain.proceed()
+                    runCatching {
+                        val waiter = synchronized(backgroundTextureWaiters) {
+                            backgroundTextureWaiters[chain.thisObject]
+                        } ?: return@runCatching
+                        val root = waiter.viewRoot.get() ?: return@runCatching
+                        val texture = chain.args.firstOrNull() as? SurfaceTexture ?: return@runCatching
+                        // Reject a late callback from the texture destroyed by the previous hide.
+                        if (texture.isReleased || root.getObjectAs<Any>("mSurTex") !== texture) return@runCatching
+                        val owner = waiter.state.get() ?: return@runCatching
+                        waiter.readyTexture = texture
+                        if (!waiter.dispatchPending.compareAndSet(false, true)) return@runCatching
+                        val decor = owner.backgroundDecorView?.get() ?: owner.backgroundCarrier
+                        if (decor == null || !HookEnvironment.postTracked(decor) {
+                            waiter.dispatchPending.set(false)
+                            if (owner.backgroundTextureWaiter !== waiter) return@postTracked
+                            val ready = waiter.readyTexture ?: return@postTracked
+                            // Material changes may replace the native texture before this task runs.
+                            if (ready.isReleased || root.getObjectAs<Any>("mSurTex") !== ready) return@postTracked
+                            synchronized(backgroundTextureWaiters) {
+                                if (backgroundTextureWaiters[waiter.listener] !== waiter) return@postTracked
+                                backgroundTextureWaiters.remove(waiter.listener)
+                                hasBackgroundTextureWaiters = backgroundTextureWaiters.isNotEmpty()
+                            }
+                            owner.backgroundTextureWaiter = null
+                            owner.awaitingBackgroundTexture = false
+                            clearStartupFill(owner)
+                        }) waiter.dispatchPending.set(false)
+                    }.onFailure { Log.e(it) }
+                    result
+                }
+                hookedTextureListeners.add(method)
+            }
+            state.backgroundTextureWaiter?.let { old ->
+                synchronized(backgroundTextureWaiters) {
+                    if (backgroundTextureWaiters[old.listener] === old) backgroundTextureWaiters.remove(old.listener)
+                }
+            }
+            val waiter = BackgroundTextureWaiter(state, viewRoot, listener)
+            state.backgroundTextureWaiter = waiter
+            synchronized(backgroundTextureWaiters) {
+                backgroundTextureWaiters[listener] = waiter
+                hasBackgroundTextureWaiters = true
+            }
+            true
+        }.getOrElse {
+            cancelBackgroundTextureWait(state)
+            Log.i("Failed: Observe WeType background texture")
+            Log.e(it)
+            false
+        }
+    }
+
+    private fun applyStartupFill(state: WeTypeWindowState, style: BackgroundStyle) {
+        if (!state.awaitingBackgroundTexture || state.backgroundTextureWaiter == null) return
+        val carrier = state.backgroundCarrier ?: return
+        val fill = state.startupFill ?: return
+        if (carrier.foreground !== fill) return
+        val color = if (state.carrierOverrides.glass != null) style.color else {
+            WeTypeHyperMaterial.fallbackColor(style.nightMode == Configuration.UI_MODE_NIGHT_YES)
+        }
+        if (fill.color != color) fill.color = color
+    }
+
+    private fun clearStartupFill(state: WeTypeWindowState) {
+        state.startupFill?.takeIf { it.color != Color.TRANSPARENT }?.color = Color.TRANSPARENT
+    }
+
+    private fun cancelBackgroundTextureWait(state: WeTypeWindowState) {
+        state.backgroundTextureWaiter?.let { waiter ->
+            synchronized(backgroundTextureWaiters) {
+                if (backgroundTextureWaiters[waiter.listener] === waiter) backgroundTextureWaiters.remove(waiter.listener)
+                hasBackgroundTextureWaiters = backgroundTextureWaiters.isNotEmpty()
+            }
+        }
+        state.backgroundTextureWaiter = null
+        state.awaitingBackgroundTexture = false
+        clearStartupFill(state)
     }
 
     private fun scheduleWindowBlur(inputMethodService: Any, refreshStyle: Boolean = true) {
@@ -337,13 +459,17 @@ internal object WeTypeWindowHooks {
         }
         val serviceReference = WeakReference(inputMethodService)
         val preDrawListener = ViewTreeObserver.OnPreDrawListener {
-            if (!state.windowVisible || !state.backgroundUpdatePending) {
+            if (!state.backgroundUpdatePending) {
                 true
             } else {
                 // A new layout/inset/lifecycle event will re-arm this work. An invalid
                 // snapshot must not turn an unrelated animation into a per-frame retry loop.
                 state.backgroundUpdatePending = false
                 runCatching {
+                    if (!state.windowVisible) {
+                        restoreInactiveBackgroundGeometry(state)
+                        return@runCatching true
+                    }
                     val service = serviceReference.get() as? InputMethodService ?: return@runCatching true
                     val context: Context = service
                     val window = service.window?.window ?: return@runCatching true
@@ -399,13 +525,18 @@ internal object WeTypeWindowHooks {
     private fun onWindowInactive(inputMethodService: Any, removeCarrier: Boolean) {
         runCatching {
             val state = getWindowState(inputMethodService)
+            if (!state.windowVisible && !removeCarrier) return@runCatching
             state.windowVisible = false
             state.stopMaterialObserver?.invoke()
             state.stopMaterialObserver = null
             state.computedVisibleImeHeightPx = null
-            removeBackgroundListeners(state)
-            hideBackgroundCarrier(state)
+            // These callbacks precede the system's IME exit animation. Keep the
+            // submitted background with the keys until their window leaves the screen.
+            // A final framework relayout can reset our zero-height decorative children.
+            // Repair geometry only on layout events, without polling or material reinitialization.
+            state.backgroundUpdatePending = true
             if (removeCarrier) {
+                removeBackgroundListeners(state)
                 removeBackgroundCarrier(state)
                 synchronized(weTypeWindowStates) {
                     weTypeWindowStates.remove(inputMethodService)
@@ -576,26 +707,61 @@ internal object WeTypeWindowHooks {
         } else {
             state.backgroundViewRoot
         }
+        if (style.hyperMaterialEnabled && state.windowVisible && state.backgroundViewRoot !== viewRoot) {
+            cancelBackgroundTextureWait(state)
+            state.awaitingBackgroundTexture = true
+        }
+        if (state.awaitingBackgroundTexture && style.hyperMaterialEnabled && viewRoot != null) {
+            awaitBackgroundTexture(state, viewRoot)
+        }
         if (carrier.background == null || state.backgroundStyle != style || state.backgroundViewRoot !== viewRoot) {
             applyContinuousCornerOutline(carrier, cornerRadii)
             val material = checkNotNull(state.hyperMaterial)
             if (style.hyperMaterialEnabled) {
+                // Native blur admission belongs to the window attachment. Ordinary
+                // hide/show reuses it; a new ViewRoot must configure it again.
+                if (state.backgroundViewRoot !== viewRoot) material.clear()
                 // Remove the old blur/bloom drawable before enabling the system material.
                 carrier.background = Color.TRANSPARENT.toDrawable()
                 if (!material.apply(style.nightMode == Configuration.UI_MODE_NIGHT_YES, style.color)) {
+                    cancelBackgroundTextureWait(state)
                     // An invocation failure keeps the keyboard legible without custom effects.
                     carrier.background = createTintDrawable(WeTypeHyperMaterial.fallbackColor(style.nightMode == Configuration.UI_MODE_NIGHT_YES), cornerRadii)
                 }
             } else {
+                cancelBackgroundTextureWait(state)
                 material.clear()
                 carrier.background = createBackgroundDrawable(carrier, context, style)
             }
             state.backgroundStyle = style
             state.backgroundViewRoot = viewRoot
         }
+        if (style.hyperMaterialEnabled) applyStartupFill(state, style)
         state.backgroundStyleDirty = false
         // This decorative child keeps a zero-height layout spec. Its rendered bounds must
         // not feed back into the IME's measurement or the app-facing inset calculation.
+        state.backgroundBounds.set(left, top, left + width, top + height)
+        layoutBackgroundCarrier(carrier, state.backgroundBounds)
+        if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(cornerRadii)
+    }
+
+    private fun restoreInactiveBackgroundGeometry(state: WeTypeWindowState) {
+        val carrier = state.backgroundCarrier ?: return
+        val style = state.backgroundStyle ?: return
+        if (!carrier.isAttachedToWindow || carrier.visibility != View.VISIBLE ||
+            carrier.parent !== state.backgroundDecorView?.get() || state.backgroundBounds.isEmpty
+        ) return
+        layoutBackgroundCarrier(carrier, state.backgroundBounds)
+        // The glass child and shadow sibling have zero-sized layout specs too.
+        // updateGeometry restores their bounds while retaining its shader/style caches.
+        if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(style.cornerRadii)
+    }
+
+    private fun layoutBackgroundCarrier(carrier: View, bounds: Rect) {
+        val width = bounds.width()
+        val height = bounds.height()
+        val left = bounds.left
+        val top = bounds.top
         if (carrier.width != width || carrier.height != height || carrier.left != left || carrier.top != top) {
             carrier.measure(
                 View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
@@ -604,7 +770,6 @@ internal object WeTypeWindowHooks {
             carrier.layout(left, top, left + width, top + height)
             carrier.invalidateOutline()
         }
-        if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(cornerRadii)
     }
 
     private fun ensureBackgroundCarrier(
@@ -617,6 +782,7 @@ internal object WeTypeWindowHooks {
         if (existing != null) return existing
 
         state.backgroundCarrier?.let { oldCarrier ->
+            clearStartupFill(state)
             state.hyperMaterial?.clear()
             (oldCarrier.parent as? ViewGroup)?.removeView(oldCarrier)
             state.backgroundStyle = null
@@ -627,6 +793,9 @@ internal object WeTypeWindowHooks {
             isClickable = false
             isFocusable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            // Changing a foreground drawable requests layout; changing its color does not.
+            // ColorDrawable skips drawing entirely while its color is transparent.
+            foreground = ColorDrawable(Color.TRANSPARENT)
         }
 
         decorGroup.addView(
@@ -635,6 +804,8 @@ internal object WeTypeWindowHooks {
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
         )
         state.backgroundCarrier = carrier
+        state.startupFill = carrier.foreground as ColorDrawable
+        state.backgroundBounds.setEmpty()
         // A fresh RenderNode restores actual ROM defaults when an override is cleared.
         state.carrierOverrides = overrides
         state.hyperMaterial = WeTypeHyperMaterial(carrier, overrides)
@@ -679,6 +850,7 @@ internal object WeTypeWindowHooks {
         }.toIntArray()
 
     private fun hideBackgroundCarrier(state: WeTypeWindowState) {
+        cancelBackgroundTextureWait(state)
         val carrier = state.backgroundCarrier ?: return
         carrier.visibility = View.INVISIBLE
         if (state.backgroundStyle?.hyperMaterialEnabled == true) {
@@ -691,6 +863,7 @@ internal object WeTypeWindowHooks {
     }
 
     private fun removeBackgroundCarrier(state: WeTypeWindowState) {
+        cancelBackgroundTextureWait(state)
         state.stopMaterialObserver?.invoke()
         state.stopMaterialObserver = null
         state.hyperMaterial?.clear()
@@ -698,6 +871,8 @@ internal object WeTypeWindowHooks {
         val carrier = state.backgroundCarrier ?: return
         (carrier.parent as? ViewGroup)?.removeView(carrier)
         state.backgroundCarrier = null
+        state.startupFill = null
+        state.backgroundBounds.setEmpty()
         state.backgroundStyle = null
         state.backgroundViewRoot = null
         state.window = null
