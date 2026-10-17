@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📦 Releases / 下载最新版本
+    url: https://github.com/NEORUAA/WeType_UI_Enhanced/releases
+    about: 遇到问题请先检查是否有更新的版本已发布修复。
+  - name: 📱 Xposed 模块仓库
+    url: https://github.com/Xposed-Modules-Repo/com.xposed.wetypehook
+    about: 查看 Xposed 官方模块仓库发布页面。

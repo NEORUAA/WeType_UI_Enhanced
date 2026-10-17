@@ -1,0 +1,49 @@
+name: ❓ 使用咨询 / Question
+description: 关于模块配置、使用方法、兼容性或环境要求的疑问咨询
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        如果你在使用或配置模块时遇到疑问，请在提交前先查阅 [README.md](https://github.com/NEORUAA/WeType_UI_Enhanced#readme)。
+        如果是明确的崩溃、失效或功能异常，请使用 **[Bug 反馈](https://github.com/NEORUAA/WeType_UI_Enhanced/issues/new?template=bug_report.yml)** 模板。
+
+  - type: input
+    id: module_version
+    attributes:
+      label: 模块版本 / Module Version
+      placeholder: "例如：1.28.5"
+    validations:
+      required: true
+
+  - type: input
+    id: wetype_version
+    attributes:
+      label: 微信输入法版本 / WeType Version
+      placeholder: "例如：3.5.3.56201"
+    validations:
+      required: false
+
+  - type: input
+    id: device_info
+    attributes:
+      label: 设备与系统版本 / Device & OS
+      placeholder: "例如：Xiaomi 14 Pro, HyperOS 2.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question_content
+    attributes:
+      label: 咨询内容 / Question Details
+      description: 必填。请详细描述你的疑问或需要协助的问题。
+      placeholder: "请在此描述你的问题..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 相关截图 / Screenshots
+      description: 可选。附上相关界面截图有助于更快理解问题。

@@ -1,0 +1,72 @@
+name: 💡 功能建议 / Feature Request
+description: 为 WeType UI Enhanced 提出新功能、新视觉样式或体验优化建议
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提出有价值的功能建议或美化改进思路！
+        
+        > [!IMPORTANT]
+        > **关于适配范围的重要声明：**
+        > 本项目核心为 **微信输入法 (WeType)** 的界面美化与个性化，以及针对 MIUI/HyperOS 全面屏键盘优化限制的解锁。
+        > **本项目不接受针对豆包输入法、搜狗输入法、百度输入法等其他三方输入法的专属美化适配请求**（请参考 Issue #36）。
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      title: 提交前自查 / Checklist
+      options:
+        - label: 我已确认该建议符合本项目定位（专注于微信输入法美化及 MIUI/HyperOS 全面屏底栏解锁）
+          required: true
+        - label: 我已搜索现有 Issues，确认没有相同或已被拒绝的类似功能建议
+          required: true
+
+  - type: dropdown
+    id: feature_category
+    attributes:
+      label: 功能分类 / Category
+      description: 请选择该建议归属的功能范畴。
+      options:
+        - "视觉样式与美化 (如材质、模糊、颜色、圆角、高光等)"
+        - "键盘组件增强 (如剪贴板、表情栏、工具栏、候选词栏)"
+        - "特殊形态支持 (如悬浮键盘、分体键盘、单手模式)"
+        - "系统级特性适配 (如 HyperOS 液态玻璃、高级材质参数调节)"
+        - "模块配置与易用性 (如预设导入导出、桌面图标管理等)"
+        - "MIUI/HyperOS 全面屏优化相关"
+        - "其他"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem_statement
+    attributes:
+      label: 需求背景与痛点 / Motivation & Problem
+      description: 必填。请描述你在什么使用场景下遇到了什么不便，或者为什么需要这个功能。
+      placeholder: "例如：当前剪贴板界面在半透明状态下存在遮挡问题，或者希望在悬浮键盘模式下也能应用自定义背景..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: 期望的实现方案或效果 / Proposed Solution
+      description: 必填。请详细描述你期望该功能如何工作、具体的界面效果或交互方式。
+      placeholder: "描述你构想的解决方案、设置项名称、预期效果等..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: system_requirements
+    attributes:
+      label: 依赖的系统或环境要求 / System Requirements
+      description: 若该功能依赖特定系统的私有接口或特定 Android 版本（例如特定系统的模糊/液态玻璃渲染），请在此说明。
+      placeholder: "例如：仅在 HyperOS 4.0+ 或支持高级材质的设备上生效..."
+
+  - type: textarea
+    id: visual_reference
+    attributes:
+      label: 设计参考或视觉草图 / Visual References
+      description: 可选。如果有相关的设计图、原型截图、其他 App 的参考实现，请在此粘贴或上传。
+      placeholder: "拖拽或粘贴图片到此处"

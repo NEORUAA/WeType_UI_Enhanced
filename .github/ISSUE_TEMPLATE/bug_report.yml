@@ -1,0 +1,169 @@
+name: 🐛 Bug 反馈 / Bug Report
+description: 提交模块在使用过程中出现的崩溃、卡死、界面异常或功能失效等问题
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你反馈问题！在提交 Bug 之前，请先确认：
+        1. 已查阅现有的 [Issues](https://github.com/NEORUAA/WeType_UI_Enhanced/issues) 与 [Releases](https://github.com/NEORUAA/WeType_UI_Enhanced/releases)，确认该问题未被提出或未在最新版本中修复；
+        2. 已在 Xposed 框架中**正确勾选了【微信输入法】**作用域；
+        3. 修改设置后已**强制停止微信输入法**并重新拉起键盘。
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      title: 提交前自查 / Checklist
+      options:
+        - label: 我使用的是本模块的最新 Release 版本或最新构建
+          required: true
+        - label: 我已搜索现有 Issues，确认没有相同或类似的问题已被提交
+          required: true
+        - label: 我已在框架中勾选【微信输入法】作用域，并在修改设置后重启了输入法进程
+          required: true
+        - label: 我已阅读 [README.md](https://github.com/NEORUAA/WeType_UI_Enhanced#readme) 中的使用要求与兼容性说明
+          required: true
+
+  - type: input
+    id: module_version
+    attributes:
+      label: 模块版本 / Module Version
+      description: 必填。请提供出现问题的 WeType UI Enhanced 模块具体版本号（例如：1.28.5、CI build 等）。
+      placeholder: "例如：1.28.5"
+    validations:
+      required: true
+
+  - type: input
+    id: wetype_version
+    attributes:
+      label: 微信输入法版本 / WeType Version
+      description: 必填。请在微信输入法「设置 - 关于微信输入法」中查看完整版本号（包括尾部数字，例如：3.5.3.56201、3.5.4 等）。
+      placeholder: "例如：3.5.3.56201"
+    validations:
+      required: true
+
+  - type: input
+    id: device_system
+    attributes:
+      label: 设备型号与系统版本 / Device & ROM
+      description: 必填。请提供手机型号与系统固件版本（如小米 HyperOS、vivo OriginOS、OPPO ColorOS 等）。
+      placeholder: "例如：Xiaomi 14 Pro, HyperOS 2.0.12.0 / Vivo X100, OriginOS 5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: android_version
+    attributes:
+      label: Android 版本 / Android Version
+      description: 必填。请选择您的 Android 系统版本。
+      options:
+        - "Android 15 / 16 / 17"
+        - "Android 14"
+        - "Android 13"
+        - "Android 12"
+        - "Android 11 或更低（本项目不支持）"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: xposed_framework
+    attributes:
+      label: Xposed 框架与运行环境 / Hook Framework
+      description: 必填。模块需要支持 Xposed API 102 的框架。
+      options:
+        - "LSPosed"
+        - "Vector"
+        - "LSPatch / 免 Root 修补"
+        - "其他框架"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: root_solution
+    attributes:
+      label: Root 方案 / Root Solution
+      description: 请选择你的设备授权方案。
+      options:
+        - "KernelSU"
+        - "APatch"
+        - "Magisk"
+        - "免 Root (LSPatch / NPatch)"
+        - "无 Root"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected_component
+    attributes:
+      label: 发生问题的模块功能 / Affected Feature
+      description: 必填。请选择主要受影响的功能区域。
+      options:
+        - "背景颜色与透明度 / 窗口模糊"
+        - "按键颜色 / 透明度 / 圆角"
+        - "品牌强调色"
+        - "候选词栏 / 拼音间距"
+        - "剪贴板 / 表情栏"
+        - "高级材质 / 系统液态玻璃 (HyperOS)"
+        - "MIUI/HyperOS 全面屏键盘优化底栏"
+        - "寄生设置页 (微信输入法关于页 Logo)"
+        - "阻止热更新"
+        - "输入法崩溃 / 卡死 / 无响应 (ANR)"
+        - "其他"
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug_description
+    attributes:
+      label: 问题详细描述 / Bug Description
+      description: 必填。请清晰说明问题现象，发生了什么错误，以及在什么情况下触发。
+      placeholder: "例如：在开启剪贴板清空时，点击清空按钮导致微信输入法卡死无响应；或者切换到深色模式重启后依然显示为浅色..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: 复现步骤 / Reproduction Steps
+      description: 必填。请尽可能详细地列出重现该 Bug 的操作步骤。
+      placeholder: |
+        1. 打开微信输入法，调起键盘
+        2. 点击...
+        3. 观察到...
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 期望行为 / Expected Behavior
+      description: 必填。请描述在正常情况下应该发生的行为。
+      placeholder: "例如：清空剪贴板后应该正常返回键盘界面，输入法不应当卡顿或无响应..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏 / Screenshots or Recordings
+      description: 强烈建议提供。UI 界面问题、显示异常请务必附上清晰的截图（可以直接把图片拖拽或粘贴到此处）。若有对比图（正常 vs 异常）更佳。
+      placeholder: "可以直接将图片或录屏拖入此输入框上传"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志信息 / Logs
+      description: 如果涉及崩溃、卡死无响应或 Hook 失效，请提供 LSPosed 日志或 logcat 日志。
+      render: shell
+      placeholder: "粘贴 LSPosed 模块日志、Xposed 日志或 adb logcat 输出"
+
+  - type: textarea
+    id: additional_info
+    attributes:
+      label: 补充说明 / Additional Context
+      description: 任何其他有助于排查问题的信息（例如是否开启了微信输入法的悬浮键盘、单手模式、或者开启了其他相关的 Xposed 模块等）。
