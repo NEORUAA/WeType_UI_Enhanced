@@ -16,7 +16,7 @@ body:
   - type: checkboxes
     id: checklist
     attributes:
-      title: 提交前自查 / Checklist
+      label: 提交前自查 / Checklist
       options:
         - label: 我已确认该建议符合本项目定位（专注于微信输入法美化及 MIUI/HyperOS 全面屏底栏解锁）
           required: true
