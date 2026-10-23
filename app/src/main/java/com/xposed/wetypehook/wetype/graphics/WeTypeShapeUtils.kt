@@ -60,17 +60,29 @@ private val weTypeSmoothContinuity = G2Continuity(
     capsuleProfile = G2ContinuityProfile.Capsule
 )
 
+internal fun createWeTypeContinuousRoundedShape(
+    topStart: CornerSize,
+    topEnd: CornerSize = topStart,
+    bottomEnd: CornerSize = topStart,
+    bottomStart: CornerSize = topStart
+): ContinuousRoundedRectangle = ContinuousRoundedRectangle(
+    topStart = topStart,
+    topEnd = topEnd,
+    bottomEnd = bottomEnd,
+    bottomStart = bottomStart,
+    continuity = weTypeSmoothContinuity
+)
+
 internal fun createWeTypeContinuousRoundedPath(
     width: Float,
     height: Float,
     cornerRadii: WeTypeCornerRadii
 ): Path {
-    val outline = ContinuousRoundedRectangle(
+    val outline = createWeTypeContinuousRoundedShape(
         topStart = CornerSize(cornerRadii.topLeft),
         topEnd = CornerSize(cornerRadii.topRight),
         bottomEnd = CornerSize(cornerRadii.bottomRight),
-        bottomStart = CornerSize(cornerRadii.bottomLeft),
-        continuity = weTypeSmoothContinuity
+        bottomStart = CornerSize(cornerRadii.bottomLeft)
     ).createOutline(
         size = Size(width, height),
         layoutDirection = LayoutDirection.Ltr,

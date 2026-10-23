@@ -49,7 +49,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CornerSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -105,6 +104,7 @@ import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
 import com.xposed.wetypehook.wetype.graphics.WeTypeCornerRadii
 import com.xposed.wetypehook.wetype.graphics.createWeTypeContinuousRoundedPath
+import com.xposed.wetypehook.wetype.graphics.createWeTypeContinuousRoundedShape
 import com.xposed.wetypehook.wetype.settings.DARK_KEY_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.LIGHT_KEY_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroups
@@ -1201,9 +1201,11 @@ private fun PreviewCard(
     val previewKeyWidth = 32.dp
     val previewKeyHeight = previewKeyWidth * (130f / 92f)
     // Scale the host's key geometry and corner radius together from its 92-unit key width.
-    val previewKeyShape = RoundedCornerShape(
-        previewKeyWidth * (WeTypeSettings.keyCornerRadiusToHostUnits(keyCornerRadius) / 92f)
-    )
+    val previewKeyShape = remember(keyCornerRadius) {
+        createWeTypeContinuousRoundedShape(
+            CornerSize(previewKeyWidth * (WeTypeSettings.keyCornerRadiusToHostUnits(keyCornerRadius) / 92f))
+        )
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()

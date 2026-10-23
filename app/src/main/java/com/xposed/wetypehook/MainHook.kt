@@ -24,6 +24,7 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import com.xposed.wetypehook.wetype.hook.WeTypeResourceHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeKeyboardSymbols
+import com.xposed.wetypehook.wetype.hook.WeTypeKeyboardCorners
 import com.xposed.wetypehook.wetype.hook.WeTypeThemeMode
 import com.xposed.wetypehook.wetype.hook.WeTypeUpdateHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeWindowHooks
@@ -342,6 +343,7 @@ class MainHook : XposedModule() {
         HookEnvironment.withHookScope("wetype.overlay-underlay") { WeTypeWindowHooks.hookTransparentOverlayUnderlay() }
         HookEnvironment.withHookScope("wetype.self-draw-colors") { hookWeTypeSelfDrawKeyColors() }
         HookEnvironment.withHookScope("wetype.key-corner") { hookWeTypeKeyboardKeyCorner() }
+        HookEnvironment.withHookScope("wetype.key-smooth-corner") { WeTypeKeyboardCorners.hook() }
         HookEnvironment.withHookScope("wetype.candidate-text") { hookWeTypeCandidateSpecialTextColor() }
         HookEnvironment.withHookScope("wetype.candidate-alpha") { hookWeTypeCandidateBackgroundAlpha() }
         HookEnvironment.withHookScope("wetype.candidate-margin") { hookWeTypeCandidateBackgroundLeftMargin() }
