@@ -26,6 +26,7 @@ import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroup
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorMode
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroups
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
+import com.xposed.wetypehook.wetype.settings.CANDIDATE_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.LIGHT_KEY_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.DARK_KEY_COLOR_GROUP_ID
 import java.lang.reflect.Method
@@ -554,7 +555,7 @@ internal object WeTypeResourceHooks {
     fun hookCandidateSpecialTextColor() {
         runCatching {
             resolveCandidateSpecialTextColorMethod().hookAfter { param ->
-                param.result = WeTypeSettings.getAppearanceColorXposed("theme_color")
+                param.result = WeTypeSettings.getAppearanceColorXposed(CANDIDATE_COLOR_GROUP_ID)
             }
             Log.i("Success: Hook candidate special text color")
         }.onFailure {

@@ -44,6 +44,7 @@ class WeTypeSettingsTest {
         val profiles = readProfiles(values)
         val expectedColors = WeTypeAppearanceColorGroups.defaultColors() + mapOf(
             "theme_color" to 0x80123456.toInt(),
+            CANDIDATE_COLOR_GROUP_ID to 0x80123456.toInt(),
             ICON_COLOR_GROUP_ID to 0x80123456.toInt(),
             LIGHT_KEY_COLOR_GROUP_ID to 0x40FCFCFE,
             DARK_KEY_COLOR_GROUP_ID to 0x40707070
@@ -190,6 +191,8 @@ class WeTypeSettingsTest {
 
         assertEquals(oldColor, profiles.light.appearanceColors[ICON_COLOR_GROUP_ID])
         assertEquals(oldColor, profiles.dark.appearanceColors[ICON_COLOR_GROUP_ID])
+        assertEquals(oldColor, profiles.light.appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+        assertEquals(oldColor, profiles.dark.appearanceColors[CANDIDATE_COLOR_GROUP_ID])
     }
 
     @Test
@@ -297,6 +300,51 @@ class WeTypeSettingsTest {
         assertEquals(repaired.light.appearanceColors[LIGHT_KEY_COLOR_GROUP_ID],
             repaired.profile(true).appearanceColors[DARK_KEY_COLOR_GROUP_ID])
         assertEquals(repaired, readProfiles(preferenceValues(repaired)))
+    }
+
+    @Test
+    fun missingCandidateColorInheritsEachProfilesEffectiveBrandColorIndependently() {
+        val saved = WeTypeSettings.defaultProfiles().let { defaults ->
+            defaults.copy(
+                light = defaults.light.copy(
+                    appearanceColors = defaults.light.appearanceColors + ("theme_color" to 0x80112233.toInt())
+                ),
+                dark = defaults.dark.copy(
+                    appearanceColors = defaults.dark.appearanceColors + ("theme_color" to 0xFF998877.toInt()),
+                    followingColors = setOf("theme_color")
+                )
+            )
+        }
+        val legacyProfiles = preferenceValues(saved).filterKeys { !it.endsWith("appearance_color_$CANDIDATE_COLOR_GROUP_ID") }
+        val migrated = readProfiles(legacyProfiles)
+        for (isDark in listOf(false, true)) {
+            assertEquals(0x80112233.toInt(), migrated.profile(isDark).appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+            assertFalse(CANDIDATE_COLOR_GROUP_ID in migrated.profile(isDark).followingColors)
+        }
+        val changedBrand = migrated.copy(light = migrated.light.copy(
+            appearanceColors = migrated.light.appearanceColors + ("theme_color" to 0xFFABCDEF.toInt())
+        ))
+        assertEquals(0x80112233.toInt(), changedBrand.profile(true).appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+        assertEquals(migrated, readProfiles(preferenceValues(migrated)))
+    }
+
+    @Test
+    fun explicitlySavedTransparentCandidateColorRemainsIndependentAndCanFollowTheOtherMode() {
+        val legacy = readProfiles(mapOf(
+            "appearance_color_theme_color" to 0xFF112233.toInt(),
+            "appearance_color_$CANDIDATE_COLOR_GROUP_ID" to 0
+        ))
+        assertEquals(0, legacy.light.appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+        assertEquals(0, legacy.dark.appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+
+        val linked = legacy.copy(dark = legacy.dark.copy(
+            appearanceColors = legacy.dark.appearanceColors + (CANDIDATE_COLOR_GROUP_ID to 0xFFABCDEF.toInt()),
+            followingColors = setOf(CANDIDATE_COLOR_GROUP_ID)
+        ))
+        val restored = readProfiles(preferenceValues(linked))
+        assertEquals(linked, restored)
+        assertEquals(0, restored.profile(true).appearanceColors[CANDIDATE_COLOR_GROUP_ID])
+        assertEquals(0xFF112233.toInt(), restored.profile(true).appearanceColors["theme_color"])
     }
 
     private fun readProfiles(values: Map<String, Any>): WeTypeSettings.Profiles =

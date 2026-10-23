@@ -412,7 +412,18 @@ object WeTypeSettings {
             dark = readProfile(true),
             disableHotUpdate = getBoolean(KEY_DISABLE_HOT_UPDATE, DEFAULT_DISABLE_HOT_UPDATE)
         ).normalized()
-        return profiles
+        fun migrateCandidateColor(isDark: Boolean): Snapshot {
+            val profile = if (isDark) profiles.dark else profiles.light
+            val prefix = if (!hasProfiles) "" else if (isDark) DARK_PROFILE_PREFIX else LIGHT_PROFILE_PREFIX
+            if (this["$prefix$KEY_APPEARANCE_COLOR_PREFIX$CANDIDATE_COLOR_GROUP_ID"] is Int) return profile
+            // The old candidate hook used the effective brand color, including cross-mode links.
+            val previousColor = profiles.profile(isDark).appearanceColors.getValue("theme_color")
+            return profile.copy(
+                appearanceColors = profile.appearanceColors + (CANDIDATE_COLOR_GROUP_ID to previousColor),
+                followingColors = profile.followingColors - CANDIDATE_COLOR_GROUP_ID
+            )
+        }
+        return profiles.copy(light = migrateCandidateColor(false), dark = migrateCandidateColor(true))
     }
 
     private fun Map<String, Any>.toSnapshot(isDark: Boolean, legacy: Boolean): Snapshot {
