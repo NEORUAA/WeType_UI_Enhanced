@@ -10,7 +10,6 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.util.Log
-import androidx.annotation.FloatRange
 import androidx.core.graphics.PathParser
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.SvgPathNormalizer
@@ -18,10 +17,7 @@ import com.xposed.wetypehook.wetype.settings.ICON_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 import kotlin.math.roundToInt
 
-internal class WeTypeIconDrawable(
-    @FloatRange(from = 0.0, to = 1.0)
-    private val backgroundAlphaFraction: Float
-) : Drawable() {
+internal class WeTypeIconDrawable : Drawable() {
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
@@ -34,17 +30,20 @@ internal class WeTypeIconDrawable(
         val bounds = bounds
         if (bounds.isEmpty) return
 
-        val userOpacity = WeTypeSettings.getToolbarIconBgOpacityXposed()
+        val appearance = WeTypeSettings.readSnapshotXposed()
+        val userOpacity = appearance.toolbarIconBgOpacity
+        // Reused drawables follow manual skin changes too; dark skins need a subtler white disc.
+        val backgroundAlphaFraction = if (WeTypeSettings.isHostDarkMode()) 0.2f else 0.9f
         val bgAlpha = (userOpacity * backgroundAlphaFraction).toInt().coerceIn(0, 255)
 
-        val accentColor = WeTypeSettings.getAppearanceColorXposed(ICON_COLOR_GROUP_ID)
+        val accentColor = appearance.appearanceColors.getValue(ICON_COLOR_GROUP_ID)
         accentPaint.color = accentColor
         backgroundPaint.alpha = resolveAlpha(bgAlpha)
 
         canvas.save()
         // 只在绘制阶段缩放并居中，不改 intrinsicWidth/Height：图标区尺寸由布局决定，
         // 若两处同时缩放会与固定尺寸 ImageView 叠乘成二次缩放。
-        val iconScale = WeTypeSettings.getIconScaleXposed()
+        val iconScale = appearance.iconScale
         canvas.translate(
             bounds.left + bounds.width() * (1f - iconScale) / 2f,
             bounds.top + bounds.height() * (1f - iconScale) / 2f
@@ -54,7 +53,7 @@ internal class WeTypeIconDrawable(
             bounds.height() * iconScale / VIEWPORT_SIZE
         )
         canvas.drawPath(BACKGROUND_PATH, backgroundPaint)
-        accentPaths().forEach { entry ->
+        accentPaths(appearance.customIconPath).forEach { entry ->
             accentPaint.alpha = resolveAlpha((Color.alpha(accentColor) * entry.fillOpacity).roundToInt())
             canvas.drawPath(entry.path, accentPaint)
         }
@@ -65,8 +64,7 @@ internal class WeTypeIconDrawable(
      * 返回当前生效的前景 path 列表。按原始字符串做缓存键，只在配置变化时重新解析，
      * 这样每帧 draw 只是一次 volatile 读；解析结果为空时回退内置徽标，避免图标消失。
      */
-    private fun accentPaths(): List<AccentPath> {
-        val source = WeTypeSettings.getCustomIconPathXposed()
+    private fun accentPaths(source: String): List<AccentPath> {
         if (source == accentCache.source) return accentCache.paths
         val parsed = buildAccentPaths(source)
         accentCache = ParsedIconPaths(source, parsed)

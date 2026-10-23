@@ -3,7 +3,7 @@ package com.xposed.wetypehook.wetype.settings
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
-import android.graphics.Color
+import android.content.res.Resources
 import android.os.FileObserver
 import android.util.Log
 import java.io.File
@@ -15,6 +15,11 @@ object WeTypeSettings {
     private const val TAG = "MIUIIME.Settings"
     private const val WETYPE_PACKAGE_NAME = "com.tencent.wetype"
     private const val KEY_WRITE_TOKEN = "settings_write_token"
+    private const val KEY_PROFILES_VERSION = "appearance_profiles_version"
+    private const val LIGHT_PROFILE_PREFIX = "appearance_light_"
+    private const val DARK_PROFILE_PREFIX = "appearance_dark_"
+    const val BACKGROUND_COLOR_ID = "background_color"
+    private const val KEY_FOLLOWING_COLORS = "following_colors"
     private const val KEY_LIGHT_COLOR = "light_color"
     private const val KEY_DARK_COLOR = "dark_color"
     private const val KEY_HYPER_MATERIAL_ENABLED = "hyper_material_enabled"
@@ -25,7 +30,7 @@ object WeTypeSettings {
     private const val KEY_EDGE_HIGHLIGHT_INTENSITY = "edge_highlight_intensity"
     private const val KEY_KEY_OPACITY = "key_opacity"
     private const val KEY_KEY_OPACITY_MIGRATED = "key_opacity_migrated"
-    // Keep the original preference key so existing saved values still migrate cleanly.
+    // Keep the original suffix so legacy appearance values migrate without translation.
     private const val KEY_CANDIDATE_BACKGROUND_ALPHA = "key_color_hook_alpha"
     private const val KEY_CANDIDATE_BACKGROUND_CORNER = "candidate_background_corner"
     private const val KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP =
@@ -62,18 +67,22 @@ object WeTypeSettings {
         LIGHT_KEY_COLOR_GROUP_ID to 0xFFfcfcfe.toInt(),
         DARK_KEY_COLOR_GROUP_ID to 0xFF707070.toInt()
     )
+    private val colorIds = setOf(BACKGROUND_COLOR_ID) + WeTypeAppearanceColorGroups.groups.map { it.id }
 
     private val settingsLock = Any()
     private val snapshotDirty = AtomicBoolean(true)
 
     @Volatile
-    private var cachedXposedSnapshot: Snapshot? = null
+    private var cachedXposedProfiles: Profiles? = null
+    @Volatile
+    private var hostContext: Context? = null
+    @Volatile
+    private var hostDarkModeProvider: (() -> Boolean?)? = null
     private var hostFile: HostPreferencesFile? = null
     private var hostFileObserver: FileObserver? = null
 
     data class Snapshot(
-        val lightColor: Int,
-        val darkColor: Int,
+        val backgroundColor: Int,
         val blurRadius: Int,
         val cornerRadius: Int,
         val keyCornerRadius: Int,
@@ -87,14 +96,56 @@ object WeTypeSettings {
         val toolbarIconBgOpacity: Int,
         val customIconPath: String,
         val iconScale: Float,
-        val disableHotUpdate: Boolean,
         val hyperMaterialEnabled: Boolean,
-        val glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides()
+        val glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides(),
+        val followingColors: Set<String> = emptySet()
     )
 
-    fun getLightColor(context: Context): Int = readSnapshot(context).lightColor
+    data class Profiles(
+        val light: Snapshot,
+        val dark: Snapshot,
+        val disableHotUpdate: Boolean = DEFAULT_DISABLE_HOT_UPDATE
+    ) {
+        // Stable map identities keep the resource-color cache valid across draw calls.
+        private val resolvedLight by lazy { resolveProfile(light, dark, isDark = false) }
+        private val resolvedDark by lazy { resolveProfile(dark, light, isDark = true) }
 
-    fun getDarkColor(context: Context): Int = readSnapshot(context).darkColor
+        fun profile(isDark: Boolean): Snapshot = if (isDark) resolvedDark else resolvedLight
+    }
+
+    fun oppositeColorId(colorId: String): String = when (colorId) {
+        LIGHT_KEY_COLOR_GROUP_ID -> DARK_KEY_COLOR_GROUP_ID
+        DARK_KEY_COLOR_GROUP_ID -> LIGHT_KEY_COLOR_GROUP_ID
+        else -> colorId
+    }
+
+    private fun resolveProfile(own: Snapshot, opposite: Snapshot, isDark: Boolean): Snapshot {
+        val following = own.followingColors.filterTo(mutableSetOf()) { id ->
+            id in colorIds && (isDark || oppositeColorId(id) !in opposite.followingColors)
+        }
+        if (following.isEmpty()) {
+            return if (own.followingColors.isEmpty()) own else own.copy(followingColors = emptySet())
+        }
+        val colors = if (following.any { it != BACKGROUND_COLOR_ID }) {
+            WeTypeAppearanceColorGroups.groups.associate { group ->
+                val color = if (group.id in following) {
+                    val sourceId = oppositeColorId(group.id)
+                    opposite.appearanceColors[sourceId]
+                        ?: WeTypeAppearanceColorGroups.findById(sourceId)?.defaultColor
+                } else own.appearanceColors[group.id]
+                group.id to (color ?: group.defaultColor)
+            }
+        } else own.appearanceColors
+        return own.copy(
+            backgroundColor = if (BACKGROUND_COLOR_ID in following) opposite.backgroundColor else own.backgroundColor,
+            appearanceColors = colors,
+            followingColors = following
+        )
+    }
+
+    fun getLightColor(context: Context): Int = readProfiles(context).profile(false).backgroundColor
+
+    fun getDarkColor(context: Context): Int = readProfiles(context).profile(true).backgroundColor
 
     fun getBlurRadius(context: Context): Int = readSnapshot(context).blurRadius
 
@@ -120,20 +171,34 @@ object WeTypeSettings {
 
     fun getAppearanceColors(context: Context): Map<String, Int> = readSnapshot(context).appearanceColors
 
-    fun isDisableHotUpdate(context: Context): Boolean = readSnapshot(context).disableHotUpdate
+    fun isDisableHotUpdate(context: Context): Boolean = readProfiles(context).disableHotUpdate
 
     fun prepareForHotReload() = synchronized(settingsLock) {
         hostFileObserver?.stopWatching()
         hostFileObserver = null
         hostFile = null
-        cachedXposedSnapshot = null
+        hostContext = null
+        hostDarkModeProvider = null
+        cachedXposedProfiles = null
         snapshotDirty.set(true)
+    }
+
+    internal fun setHostDarkModeProvider(provider: (() -> Boolean?)?) {
+        hostDarkModeProvider = provider
+    }
+
+    fun isHostDarkMode(resources: Resources? = null): Boolean {
+        runCatching { hostDarkModeProvider?.invoke() }.getOrNull()?.let { return it }
+        val configuration = (resources ?: hostContext?.resources)?.configuration ?: return false
+        return configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+            Configuration.UI_MODE_NIGHT_YES
     }
 
     fun ensureHostSnapshot(context: Context) {
         val appContext = context.applicationContext ?: context
         if (appContext.packageName != WETYPE_PACKAGE_NAME) return
         synchronized(settingsLock) {
+            hostContext = appContext
             if (hostFile == null) {
                 val directory = File(appContext.applicationInfo.dataDir, "shared_prefs")
                 directory.mkdirs()
@@ -151,57 +216,16 @@ object WeTypeSettings {
             }
             // Refresh at input/view entry too, including after a process was frozen.
             snapshotDirty.set(true)
-            readSnapshotXposed()
+            readProfilesXposed()
         }
     }
 
     fun save(
         context: Context,
-        lightColor: Int,
-        darkColor: Int,
-        blurRadius: Int,
-        cornerRadius: Int,
-        keyCornerRadius: Int,
-        edgeHighlightEnabled: Boolean,
-        edgeHighlightIntensity: Int,
-        candidateBackgroundAlpha: Int,
-        candidateBackgroundCorner: Float,
-        candidateBackgroundLeftMarginDp: Int,
-        candidatePinyinLeftMarginDp: Int,
-        toolbarIconBgOpacity: Int,
-        appearanceColors: Map<String, Int>,
-        customIconPath: String = DEFAULT_CUSTOM_ICON_PATH,
-        iconScale: Float = DEFAULT_ICON_SCALE,
-        disableHotUpdate: Boolean = DEFAULT_DISABLE_HOT_UPDATE,
-        hyperMaterialEnabled: Boolean = DEFAULT_HYPER_MATERIAL_ENABLED,
-        glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides(),
+        profiles: Profiles,
         onPersisted: (Boolean) -> Unit = {}
     ): Boolean {
-        val snapshot = Snapshot(
-            lightColor = lightColor,
-            darkColor = darkColor,
-            blurRadius = blurRadius.coerceIn(0, 100),
-            cornerRadius = cornerRadius.coerceIn(0, MAX_CORNER_RADIUS),
-            keyCornerRadius = keyCornerRadius.coerceIn(0, MAX_KEY_CORNER_RADIUS),
-            edgeHighlightEnabled = edgeHighlightEnabled,
-            edgeHighlightIntensity = edgeHighlightIntensity.coerceIn(0, 200),
-            candidateBackgroundAlpha = candidateBackgroundAlpha.coerceIn(0, 255),
-            candidateBackgroundCorner = candidateBackgroundCorner.coerceIn(
-                0f,
-                MAX_CANDIDATE_BACKGROUND_CORNER.toFloat()
-            ),
-            candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.coerceIn(0, 64),
-            candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.coerceIn(0, 64),
-            toolbarIconBgOpacity = toolbarIconBgOpacity.coerceIn(0, 255),
-            customIconPath = customIconPath,
-            iconScale = iconScale.coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
-            appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
-                group.id to (appearanceColors[group.id] ?: group.defaultColor)
-            },
-            disableHotUpdate = disableHotUpdate,
-            hyperMaterialEnabled = hyperMaterialEnabled,
-            glassOverrides = glassOverrides
-        )
+        val normalized = profiles.normalized()
         val appContext = context.applicationContext ?: context
         if (appContext.packageName != WETYPE_PACKAGE_NAME) {
             onPersisted(false)
@@ -212,9 +236,9 @@ object WeTypeSettings {
             synchronized(settingsLock) {
                 checkNotNull(hostFile).withLock {
                     val preferences = appContext.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
-                    writeSnapshot(preferences, snapshot)
+                    writeProfiles(preferences, normalized)
                 }.also { saved ->
-                    if (saved) cachedXposedSnapshot = snapshot
+                    if (saved) cachedXposedProfiles = normalized
                     snapshotDirty.set(true)
                 }
             }
@@ -223,135 +247,103 @@ object WeTypeSettings {
         return persisted
     }
 
-    fun getCurrentBackgroundColorXposed(context: Context): Int {
-        val snapshot = readSnapshotXposed()
-        val isDarkMode =
-            context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-                Configuration.UI_MODE_NIGHT_YES
-        return if (isDarkMode) snapshot.darkColor else snapshot.lightColor
-    }
+    fun getCurrentBackgroundColorXposed(context: Context): Int =
+        readSnapshotXposed(context.resources).backgroundColor
 
-    fun getBlurRadiusXposed(context: Context): Int = readSnapshotXposed().blurRadius
+    fun getBlurRadiusXposed(context: Context): Int = readSnapshotXposed(context.resources).blurRadius
 
-    fun getCornerRadiusXposed(context: Context): Int = readSnapshotXposed().cornerRadius
+    fun getCornerRadiusXposed(context: Context): Int = readSnapshotXposed(context.resources).cornerRadius
 
-    fun getKeyCornerRadiusXposed(): Int = readSnapshotXposed().keyCornerRadius
+    fun getKeyCornerRadiusXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).keyCornerRadius
 
     fun isEdgeHighlightEnabledXposed(context: Context): Boolean =
-        readSnapshotXposed().edgeHighlightEnabled
+        readSnapshotXposed(context.resources).edgeHighlightEnabled
 
     fun getEdgeHighlightIntensityXposed(context: Context): Int =
-        readSnapshotXposed().edgeHighlightIntensity
+        readSnapshotXposed(context.resources).edgeHighlightIntensity
 
-    fun getCandidateBackgroundAlphaXposed(): Int =
-        readSnapshotXposed().candidateBackgroundAlpha
+    fun getCandidateBackgroundAlphaXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).candidateBackgroundAlpha
 
-    fun getCandidateBackgroundCornerXposed(): Float =
-        readSnapshotXposed().candidateBackgroundCorner
+    fun getCandidateBackgroundCornerXposed(resources: Resources? = null): Float =
+        readSnapshotXposed(resources).candidateBackgroundCorner
 
-    fun getCandidateBackgroundLeftMarginDpXposed(): Int =
-        readSnapshotXposed().candidateBackgroundLeftMarginDp
+    fun getCandidateBackgroundLeftMarginDpXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).candidateBackgroundLeftMarginDp
 
-    fun getToolbarIconBgOpacityXposed(): Int =
-        readSnapshotXposed().toolbarIconBgOpacity
+    fun getToolbarIconBgOpacityXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).toolbarIconBgOpacity
 
-    /**
-     * 自定义 logo 前景的 SVG path 数据，多条 path 以换行分隔；空串表示使用内置徽标。
-     * Xposed 侧每次读取，配合 FileObserver 失效机制可在保存后即时生效。
-     */
-    fun getCustomIconPathXposed(): String = readSnapshotXposed().customIconPath
+    /** SVG foreground paths separated by newlines; an empty value selects the built-in logo. */
+    fun getCustomIconPathXposed(resources: Resources? = null): String =
+        readSnapshotXposed(resources).customIconPath
 
-    /**
-     * 键盘图标缩放系数（0.6~1.4，1.0 为原始大小）。
-     * Xposed 侧每次读取，保存后由 FileObserver 失效机制即时生效。
-     */
-    fun getIconScaleXposed(): Float = readSnapshotXposed().iconScale
+    fun getIconScaleXposed(resources: Resources? = null): Float =
+        readSnapshotXposed(resources).iconScale
 
-    fun getCandidatePinyinLeftMarginDpXposed(): Int =
-        readSnapshotXposed().candidatePinyinLeftMarginDp
+    fun getCandidatePinyinLeftMarginDpXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).candidatePinyinLeftMarginDp
 
-    fun isDisableHotUpdateXposed(): Boolean = readSnapshotXposed().disableHotUpdate
+    fun isDisableHotUpdateXposed(): Boolean = readProfilesXposed().disableHotUpdate
 
-    fun getAppearanceColorXposed(groupId: String): Int =
-        readSnapshotXposed().appearanceColors[groupId]
+    fun getAppearanceColorXposed(groupId: String, resources: Resources? = null): Int =
+        readSnapshotXposed(resources).appearanceColors[groupId]
             ?: WeTypeAppearanceColorGroups.findById(groupId)?.defaultColor
             ?: 0
 
-    fun getAppearanceColorsXposed(): Map<String, Int> = readSnapshotXposed().appearanceColors
+    fun getAppearanceColorsXposed(resources: Resources? = null): Map<String, Int> =
+        readSnapshotXposed(resources).appearanceColors
 
-    fun readSnapshot(context: Context): Snapshot {
+    fun readProfiles(context: Context): Profiles {
         ensureHostSnapshot(context)
-        return readSnapshotXposed()
+        return readProfilesXposed()
     }
 
-    internal fun readSnapshotXposed(): Snapshot {
-        if (!snapshotDirty.get()) cachedXposedSnapshot?.let { return it }
+    fun readSnapshot(context: Context): Snapshot =
+        readProfiles(context).profile(isHostDarkMode(context.resources))
+
+    internal fun readSnapshotXposed(resources: Resources? = null): Snapshot =
+        readProfilesXposed().profile(isHostDarkMode(resources))
+
+    internal fun readProfilesXposed(): Profiles {
+        if (!snapshotDirty.get()) cachedXposedProfiles?.let { return it }
         return synchronized(settingsLock) {
-            val file = hostFile ?: return@synchronized defaultSnapshot()
-            if (snapshotDirty.getAndSet(false) || cachedXposedSnapshot == null) {
-                runCatching { file.read().toSnapshot() }
-                    .onSuccess { cachedXposedSnapshot = it }
+            val file = hostFile ?: return@synchronized defaultProfiles()
+            if (snapshotDirty.getAndSet(false) || cachedXposedProfiles == null) {
+                runCatching { file.read().toProfiles() }
+                    .onSuccess { cachedXposedProfiles = it }
                     .onFailure {
-                        if (cachedXposedSnapshot == null) cachedXposedSnapshot = defaultSnapshot()
+                        if (cachedXposedProfiles == null) cachedXposedProfiles = defaultProfiles()
                         Log.e(TAG, "Failed to read host preferences", it)
                     }
             }
-            cachedXposedSnapshot ?: defaultSnapshot()
+            cachedXposedProfiles ?: defaultProfiles()
         }
     }
 
-    private fun writeSnapshot(
-        preferences: SharedPreferences,
-        snapshot: Snapshot
-    ): Boolean {
+    private fun writeProfiles(preferences: SharedPreferences, profiles: Profiles): Boolean {
         val editor = preferences.edit()
-            .putInt(KEY_LIGHT_COLOR, snapshot.lightColor)
-            .putInt(KEY_DARK_COLOR, snapshot.darkColor)
-            .putInt(KEY_BLUR_RADIUS, snapshot.blurRadius)
-            .putInt(KEY_CORNER_RADIUS, snapshot.cornerRadius)
-            .putInt(KEY_KEY_CORNER_RADIUS, snapshot.keyCornerRadius)
-            .putBoolean(KEY_EDGE_HIGHLIGHT_ENABLED, snapshot.edgeHighlightEnabled)
-            .putInt(KEY_EDGE_HIGHLIGHT_INTENSITY, snapshot.edgeHighlightIntensity)
-            .putInt(KEY_CANDIDATE_BACKGROUND_ALPHA, snapshot.candidateBackgroundAlpha)
-            .putFloat(KEY_CANDIDATE_BACKGROUND_CORNER, snapshot.candidateBackgroundCorner)
-            .putInt(
-                KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
-                snapshot.candidateBackgroundLeftMarginDp
-            )
-            .putInt(
-                KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
-                snapshot.candidatePinyinLeftMarginDp
-            )
-            .putInt(KEY_TOOLBAR_ICON_BG_OPACITY, snapshot.toolbarIconBgOpacity)
-            .putString(KEY_CUSTOM_ICON_PATH, snapshot.customIconPath)
-            .putFloat(KEY_ICON_SCALE, snapshot.iconScale)
-            .putBoolean(KEY_HYPER_MATERIAL_ENABLED, snapshot.hyperMaterialEnabled)
-            .putBoolean(KEY_DISABLE_HOT_UPDATE, snapshot.disableHotUpdate)
-            .putBoolean(KEY_KEY_OPACITY_MIGRATED, true)
-            .remove(KEY_KEY_OPACITY)
-        fun writeFloatParameters(key: String, values: List<Float>?, maxCount: Int) {
-            editor.remove("${key}_count")
-            repeat(maxCount) { editor.remove("${key}_$it") }
-            values?.let {
-                editor.putInt("${key}_count", it.size)
-                it.forEachIndexed { index, value -> editor.putFloat("${key}_$index", value) }
+        for (prefix in listOf(LIGHT_PROFILE_PREFIX, DARK_PROFILE_PREFIX)) {
+            // Null overrides must erase any previous profile value without reviving legacy values.
+            for ((key, count) in listOf("glass_params" to 42, "glass_bloom" to 16)) {
+                editor.remove("$prefix${key}_count")
+                repeat(count) { editor.remove("$prefix${key}_$it") }
+            }
+            editor.remove("${prefix}glass_blur_small")
+                .remove("${prefix}glass_blur_large")
+                .remove("${prefix}glass_material_type")
+            WeTypeAppearanceColorGroups.obsoleteGroupIds.forEach { groupId ->
+                editor.remove("$prefix$KEY_APPEARANCE_COLOR_PREFIX$groupId")
             }
         }
-        writeFloatParameters("glass_params", snapshot.glassOverrides.glass, 42)
-        writeFloatParameters("glass_bloom", snapshot.glassOverrides.bloom, 16)
-        editor.remove("glass_blur_small").remove("glass_blur_large").remove("glass_material_type")
-        snapshot.glassOverrides.blurRadii?.let {
-            editor.putInt("glass_blur_small", it[0]).putInt("glass_blur_large", it[1])
-        }
-        snapshot.glassOverrides.materialType?.let { editor.putInt("glass_material_type", it) }
-        WeTypeAppearanceColorGroups.groups.forEach { group ->
-            editor.putInt(
-                "$KEY_APPEARANCE_COLOR_PREFIX${group.id}",
-                snapshot.appearanceColors[group.id] ?: group.defaultColor
-            )
-        }
-        WeTypeAppearanceColorGroups.obsoleteGroupIds.forEach { groupId ->
-            editor.remove("$KEY_APPEARANCE_COLOR_PREFIX$groupId")
+        profiles.toPreferenceValues().forEach { (key, value) ->
+            when (value) {
+                is Int -> editor.putInt(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is String -> editor.putString(key, value)
+            }
         }
         // A fresh token forces a disk write even if another process changed the file
         // while this process still has the same values in its SharedPreferences cache.
@@ -363,91 +355,151 @@ object WeTypeSettings {
         return editor.commit()
     }
 
-    internal fun Map<String, Any>.toSnapshot(): Snapshot {
-        val shouldMigrateLegacyKeyOpacity = contains(KEY_KEY_OPACITY) &&
-            !getBoolean(KEY_KEY_OPACITY_MIGRATED, false)
-        val legacyKeyOpacity = if (shouldMigrateLegacyKeyOpacity) {
-            getInt(KEY_KEY_OPACITY, 255).coerceIn(0, 255)
-        } else {
-            null
+    internal fun Profiles.toPreferenceValues(): Map<String, Any> = buildMap {
+        val profiles = this@toPreferenceValues.normalized()
+        put(KEY_PROFILES_VERSION, 1)
+        put(KEY_DISABLE_HOT_UPDATE, disableHotUpdate)
+        fun writeProfile(prefix: String, profile: Snapshot) {
+            val snapshot = profile
+            fun putValue(key: String, value: Any) { put(prefix + key, value) }
+            putValue(BACKGROUND_COLOR_ID, snapshot.backgroundColor)
+            putValue(KEY_FOLLOWING_COLORS, snapshot.followingColors.sorted().joinToString(","))
+            putValue(KEY_BLUR_RADIUS, snapshot.blurRadius)
+            putValue(KEY_CORNER_RADIUS, snapshot.cornerRadius)
+            putValue(KEY_KEY_CORNER_RADIUS, snapshot.keyCornerRadius)
+            putValue(KEY_EDGE_HIGHLIGHT_ENABLED, snapshot.edgeHighlightEnabled)
+            putValue(KEY_EDGE_HIGHLIGHT_INTENSITY, snapshot.edgeHighlightIntensity)
+            putValue(KEY_CANDIDATE_BACKGROUND_ALPHA, snapshot.candidateBackgroundAlpha)
+            putValue(KEY_CANDIDATE_BACKGROUND_CORNER, snapshot.candidateBackgroundCorner)
+            putValue(KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP, snapshot.candidateBackgroundLeftMarginDp)
+            putValue(KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP, snapshot.candidatePinyinLeftMarginDp)
+            putValue(KEY_TOOLBAR_ICON_BG_OPACITY, snapshot.toolbarIconBgOpacity)
+            putValue(KEY_CUSTOM_ICON_PATH, snapshot.customIconPath)
+            putValue(KEY_ICON_SCALE, snapshot.iconScale)
+            putValue(KEY_HYPER_MATERIAL_ENABLED, snapshot.hyperMaterialEnabled)
+            snapshot.appearanceColors.forEach { (id, color) ->
+                putValue(KEY_APPEARANCE_COLOR_PREFIX + id, color)
+            }
+            fun writeFloats(key: String, values: List<Float>?) {
+                values?.let {
+                    putValue("${key}_count", it.size)
+                    it.forEachIndexed { index, value -> putValue("${key}_$index", value) }
+                }
+            }
+            writeFloats("glass_params", snapshot.glassOverrides.glass)
+            writeFloats("glass_bloom", snapshot.glassOverrides.bloom)
+            snapshot.glassOverrides.blurRadii?.let {
+                putValue("glass_blur_small", it[0])
+                putValue("glass_blur_large", it[1])
+            }
+            snapshot.glassOverrides.materialType?.let { putValue("glass_material_type", it) }
         }
+        writeProfile(LIGHT_PROFILE_PREFIX, profiles.light)
+        writeProfile(DARK_PROFILE_PREFIX, profiles.dark)
+    }
+
+    internal fun Map<String, Any>.toProfiles(): Profiles {
+        val hasProfiles = getInt(KEY_PROFILES_VERSION, 0) >= 1
+        fun readProfile(isDark: Boolean): Snapshot {
+            if (!hasProfiles) return toSnapshot(isDark, legacy = true)
+            val prefix = if (isDark) DARK_PROFILE_PREFIX else LIGHT_PROFILE_PREFIX
+            val values = entries.filter { it.key.startsWith(prefix) }
+                .associate { it.key.removePrefix(prefix) to it.value }
+            return values.toSnapshot(isDark, legacy = false)
+        }
+        val profiles = Profiles(
+            light = readProfile(false),
+            dark = readProfile(true),
+            disableHotUpdate = getBoolean(KEY_DISABLE_HOT_UPDATE, DEFAULT_DISABLE_HOT_UPDATE)
+        ).normalized()
+        return profiles
+    }
+
+    private fun Map<String, Any>.toSnapshot(isDark: Boolean, legacy: Boolean): Snapshot {
+        val legacyKeyOpacity = if (legacy && contains(KEY_KEY_OPACITY) &&
+            !getBoolean(KEY_KEY_OPACITY_MIGRATED, false)
+        ) {
+            getInt(KEY_KEY_OPACITY, 255).coerceIn(0, 255)
+        } else null
+        val backgroundKey = if (legacy) {
+            if (isDark) KEY_DARK_COLOR else KEY_LIGHT_COLOR
+        } else BACKGROUND_COLOR_ID
         return Snapshot(
-            lightColor = getInt(KEY_LIGHT_COLOR, DEFAULT_LIGHT_COLOR),
-            darkColor = getInt(KEY_DARK_COLOR, DEFAULT_DARK_COLOR),
+            backgroundColor = getInt(backgroundKey, if (isDark) DEFAULT_DARK_COLOR else DEFAULT_LIGHT_COLOR),
             blurRadius = getInt(KEY_BLUR_RADIUS, DEFAULT_BLUR_RADIUS),
-            cornerRadius = getInt(KEY_CORNER_RADIUS, DEFAULT_CORNER_RADIUS)
-                .coerceIn(0, MAX_CORNER_RADIUS),
-            keyCornerRadius = getInt(KEY_KEY_CORNER_RADIUS, DEFAULT_KEY_CORNER_RADIUS)
-                .coerceIn(0, MAX_KEY_CORNER_RADIUS),
-            edgeHighlightEnabled = getBoolean(
-                KEY_EDGE_HIGHLIGHT_ENABLED,
-                DEFAULT_EDGE_HIGHLIGHT_ENABLED
-            ),
-            edgeHighlightIntensity = getInt(
-                KEY_EDGE_HIGHLIGHT_INTENSITY,
-                DEFAULT_EDGE_HIGHLIGHT_INTENSITY
-            ),
-            candidateBackgroundAlpha = getInt(
-                KEY_CANDIDATE_BACKGROUND_ALPHA,
-                DEFAULT_CANDIDATE_BACKGROUND_ALPHA
-            ),
-            candidateBackgroundCorner = getFloat(
-                KEY_CANDIDATE_BACKGROUND_CORNER,
-                DEFAULT_CANDIDATE_BACKGROUND_CORNER
-            ).coerceIn(0f, MAX_CANDIDATE_BACKGROUND_CORNER.toFloat()),
-            candidateBackgroundLeftMarginDp = getInt(
-                KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
-                DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP
-            ).coerceIn(0, 64),
-            candidatePinyinLeftMarginDp = getInt(
-                KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
-                DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP
-            ).coerceIn(0, 64),
-            toolbarIconBgOpacity = getInt(KEY_TOOLBAR_ICON_BG_OPACITY, DEFAULT_TOOLBAR_ICON_BG_OPACITY).coerceIn(0, 255),
+            cornerRadius = getInt(KEY_CORNER_RADIUS, DEFAULT_CORNER_RADIUS),
+            keyCornerRadius = getInt(KEY_KEY_CORNER_RADIUS, DEFAULT_KEY_CORNER_RADIUS),
+            edgeHighlightEnabled = getBoolean(KEY_EDGE_HIGHLIGHT_ENABLED, DEFAULT_EDGE_HIGHLIGHT_ENABLED),
+            edgeHighlightIntensity = getInt(KEY_EDGE_HIGHLIGHT_INTENSITY, DEFAULT_EDGE_HIGHLIGHT_INTENSITY),
+            candidateBackgroundAlpha = getInt(KEY_CANDIDATE_BACKGROUND_ALPHA, DEFAULT_CANDIDATE_BACKGROUND_ALPHA),
+            candidateBackgroundCorner = getFloat(KEY_CANDIDATE_BACKGROUND_CORNER, DEFAULT_CANDIDATE_BACKGROUND_CORNER),
+            candidateBackgroundLeftMarginDp = getInt(KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP, DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP),
+            candidatePinyinLeftMarginDp = getInt(KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP, DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP),
+            toolbarIconBgOpacity = getInt(KEY_TOOLBAR_ICON_BG_OPACITY, DEFAULT_TOOLBAR_ICON_BG_OPACITY),
             customIconPath = getString(KEY_CUSTOM_ICON_PATH, DEFAULT_CUSTOM_ICON_PATH),
-            iconScale = getFloat(KEY_ICON_SCALE, DEFAULT_ICON_SCALE)
-                .coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
+            iconScale = getFloat(KEY_ICON_SCALE, DEFAULT_ICON_SCALE),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
-                val key = "$KEY_APPEARANCE_COLOR_PREFIX${group.id}"
-                val fallbackColor = if (group.id == ICON_COLOR_GROUP_ID) {
-                    // Until the independent icon color is saved, inherit the old logo color.
+                val fallbackColor = if (legacy && group.id == ICON_COLOR_GROUP_ID) {
                     getInt("${KEY_APPEARANCE_COLOR_PREFIX}theme_color", group.defaultColor)
                 } else if (legacyKeyOpacity != null) {
                     legacyKeyColorDefaults[group.id] ?: group.defaultColor
-                } else {
-                    group.defaultColor
-                }
-                val color = getInt(key, fallbackColor)
+                } else group.defaultColor
+                val color = getInt("$KEY_APPEARANCE_COLOR_PREFIX${group.id}", fallbackColor)
                 group.id to migrateLegacyKeyOpacity(group, color, legacyKeyOpacity)
             },
             hyperMaterialEnabled = getBoolean(KEY_HYPER_MATERIAL_ENABLED, DEFAULT_HYPER_MATERIAL_ENABLED),
             glassOverrides = GlassMaterialOverrides.read(this),
-            disableHotUpdate = getBoolean(KEY_DISABLE_HOT_UPDATE, DEFAULT_DISABLE_HOT_UPDATE)
+            followingColors = if (legacy) emptySet() else getString(KEY_FOLLOWING_COLORS, "")
+                .split(',').toSet()
+        ).normalized()
+    }
+
+    private fun Profiles.normalized(): Profiles {
+        val normalizedLight = light.normalized()
+        val normalizedDark = dark.normalized()
+        // Corrupt mutual links resolve to the light profile's original color, never recurse.
+        val lightFollowing = normalizedLight.followingColors.filterTo(mutableSetOf()) { id ->
+            oppositeColorId(id) !in normalizedDark.followingColors
+        }
+        return copy(
+            light = normalizedLight.copy(followingColors = lightFollowing),
+            dark = normalizedDark
         )
     }
+
+    private fun Snapshot.normalized(): Snapshot = copy(
+        blurRadius = blurRadius.coerceIn(0, 100),
+        cornerRadius = cornerRadius.coerceIn(0, MAX_CORNER_RADIUS),
+        keyCornerRadius = keyCornerRadius.coerceIn(0, MAX_KEY_CORNER_RADIUS),
+        edgeHighlightIntensity = edgeHighlightIntensity.coerceIn(0, 200),
+        candidateBackgroundAlpha = candidateBackgroundAlpha.coerceIn(0, 255),
+        candidateBackgroundCorner = candidateBackgroundCorner.coerceIn(0f, MAX_CANDIDATE_BACKGROUND_CORNER.toFloat()),
+        candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.coerceIn(0, 64),
+        candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.coerceIn(0, 64),
+        toolbarIconBgOpacity = toolbarIconBgOpacity.coerceIn(0, 255),
+        iconScale = iconScale.coerceIn(MIN_ICON_SCALE, MAX_ICON_SCALE),
+        appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
+            group.id to (appearanceColors[group.id] ?: group.defaultColor)
+        },
+        followingColors = followingColors.filterTo(mutableSetOf()) { it in colorIds }
+    )
 
     private fun migrateLegacyKeyOpacity(
         group: WeTypeAppearanceColorGroup,
         color: Int,
         legacyKeyOpacity: Int?
     ): Int {
-        if (!group.isKeyColorGroup || legacyKeyOpacity == null || Color.alpha(color) != 0xFF) {
-            return color
-        }
+        if (!group.isKeyColorGroup || legacyKeyOpacity == null || color ushr 24 != 0xFF) return color
         return (legacyKeyOpacity shl 24) or (color and 0x00FFFFFF)
     }
 
     private fun Map<String, Any>.getInt(key: String, default: Int): Int = this[key] as? Int ?: default
-
     private fun Map<String, Any>.getFloat(key: String, default: Float): Float = this[key] as? Float ?: default
-
     private fun Map<String, Any>.getBoolean(key: String, default: Boolean): Boolean = this[key] as? Boolean ?: default
-
     private fun Map<String, Any>.getString(key: String, default: String): String = this[key] as? String ?: default
 
-    private fun defaultSnapshot(): Snapshot = Snapshot(
-        lightColor = DEFAULT_LIGHT_COLOR,
-        darkColor = DEFAULT_DARK_COLOR,
+    fun defaultSnapshot(isDark: Boolean): Snapshot = Snapshot(
+        backgroundColor = if (isDark) DEFAULT_DARK_COLOR else DEFAULT_LIGHT_COLOR,
         blurRadius = DEFAULT_BLUR_RADIUS,
         cornerRadius = DEFAULT_CORNER_RADIUS,
         keyCornerRadius = DEFAULT_KEY_CORNER_RADIUS,
@@ -461,8 +513,8 @@ object WeTypeSettings {
         customIconPath = DEFAULT_CUSTOM_ICON_PATH,
         iconScale = DEFAULT_ICON_SCALE,
         appearanceColors = WeTypeAppearanceColorGroups.defaultColors(),
-        disableHotUpdate = DEFAULT_DISABLE_HOT_UPDATE,
         hyperMaterialEnabled = DEFAULT_HYPER_MATERIAL_ENABLED
     )
 
+    fun defaultProfiles(): Profiles = Profiles(defaultSnapshot(false), defaultSnapshot(true))
 }

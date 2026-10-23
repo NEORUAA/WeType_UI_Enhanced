@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -58,7 +60,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
@@ -71,6 +73,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color as ComposeColor
@@ -92,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import com.kyant.capsule.ContinuousRoundedRectangle
+import com.xposed.wetypehook.ui.TabRowWithContour
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
@@ -108,6 +114,8 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import com.xposed.wetypehook.ui.ColorPalette
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -116,12 +124,14 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
-import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Info
@@ -425,28 +435,165 @@ private fun SyncSystemBars(darkMode: Boolean) {
     }
 }
 
+private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
+    var backgroundColor by mutableIntStateOf(snapshot.backgroundColor)
+    var followingColors by mutableStateOf(snapshot.followingColors)
+    var hyperMaterialEnabled by mutableStateOf(snapshot.hyperMaterialEnabled)
+    var blurRadius by mutableIntStateOf(snapshot.blurRadius)
+    var cornerRadius by mutableIntStateOf(snapshot.cornerRadius)
+    var keyCornerRadius by mutableIntStateOf(snapshot.keyCornerRadius)
+    var edgeHighlightEnabled by mutableStateOf(snapshot.edgeHighlightEnabled)
+    var edgeHighlightIntensity by mutableIntStateOf(snapshot.edgeHighlightIntensity)
+    var candidateBackgroundAlpha by mutableIntStateOf(snapshot.candidateBackgroundAlpha)
+    var candidateBackgroundCorner by mutableIntStateOf(snapshot.candidateBackgroundCorner.roundToInt())
+    var candidateBackgroundLeftMarginDp by mutableStateOf(snapshot.candidateBackgroundLeftMarginDp.toString())
+    var candidatePinyinLeftMarginDp by mutableStateOf(snapshot.candidatePinyinLeftMarginDp.toString())
+    var toolbarIconBgOpacity by mutableIntStateOf(snapshot.toolbarIconBgOpacity)
+    var customIconPath by mutableStateOf(snapshot.customIconPath)
+    var iconScale by mutableFloatStateOf(snapshot.iconScale)
+    var previewGlassOverrides by mutableStateOf(snapshot.glassOverrides)
+    val glassInput = mutableStateListOf(
+        *GlassOverrideField.entries.map { snapshot.glassOverrides.text(it) }.toTypedArray()
+    )
+    val appearanceGroupColors = mutableStateListOf(
+        *WeTypeAppearanceColorGroups.groups.map { snapshot.appearanceColors[it.id] ?: it.defaultColor }.toTypedArray()
+    )
+
+    fun color(colorId: String): Int {
+        if (colorId == WeTypeSettings.BACKGROUND_COLOR_ID) return backgroundColor
+        val index = WeTypeAppearanceColorGroups.groups.indexOfFirst { it.id == colorId }
+        return appearanceGroupColors[index]
+    }
+
+    fun setColor(colorId: String, color: Int) {
+        if (colorId == WeTypeSettings.BACKGROUND_COLOR_ID) {
+            backgroundColor = color
+        } else {
+            val index = WeTypeAppearanceColorGroups.groups.indexOfFirst { it.id == colorId }
+            appearanceGroupColors[index] = color
+        }
+    }
+
+    fun resolvedColor(colorId: String, opposite: AppearanceDraft): Int =
+        if (colorId in followingColors) opposite.color(WeTypeSettings.oppositeColorId(colorId))
+        else color(colorId)
+
+    fun parsedGlassOverrides(): GlassMaterialOverrides? = runCatching {
+        GlassMaterialOverrides.parse(GlassOverrideField.entries.associateWith { glassInput[it.ordinal] })
+    }.getOrNull()
+
+    fun validationError(): Int? {
+        if (candidateBackgroundLeftMarginDp.toIntOrNull() !in 0..64 ||
+            candidatePinyinLeftMarginDp.toIntOrNull() !in 0..64
+        ) return R.string.settings_invalid_margin
+        if (parsedGlassOverrides() == null) return R.string.settings_glass_invalid
+        return null
+    }
+
+    fun toSnapshot() = WeTypeSettings.Snapshot(
+        backgroundColor = backgroundColor,
+        blurRadius = blurRadius,
+        cornerRadius = cornerRadius,
+        keyCornerRadius = keyCornerRadius,
+        edgeHighlightEnabled = edgeHighlightEnabled,
+        edgeHighlightIntensity = edgeHighlightIntensity,
+        candidateBackgroundAlpha = candidateBackgroundAlpha,
+        candidateBackgroundCorner = candidateBackgroundCorner.toFloat(),
+        candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.toInt(),
+        candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.toInt(),
+        appearanceColors = WeTypeAppearanceColorGroups.groups.mapIndexed { index, group ->
+            group.id to appearanceGroupColors[index]
+        }.toMap(),
+        toolbarIconBgOpacity = toolbarIconBgOpacity,
+        customIconPath = customIconPath,
+        iconScale = iconScale,
+        hyperMaterialEnabled = hyperMaterialEnabled,
+        glassOverrides = requireNotNull(parsedGlassOverrides()),
+        followingColors = followingColors
+    )
+
+    companion object {
+        val Saver = mapSaver(
+            save = { draft: AppearanceDraft ->
+                buildMap<String, Any> {
+                    put("backgroundColor", draft.backgroundColor)
+                    put("followingColors", ArrayList(draft.followingColors))
+                    put("hyperMaterialEnabled", draft.hyperMaterialEnabled)
+                    put("blurRadius", draft.blurRadius)
+                    put("cornerRadius", draft.cornerRadius)
+                    put("keyCornerRadius", draft.keyCornerRadius)
+                    put("edgeHighlightEnabled", draft.edgeHighlightEnabled)
+                    put("edgeHighlightIntensity", draft.edgeHighlightIntensity)
+                    put("candidateBackgroundAlpha", draft.candidateBackgroundAlpha)
+                    put("candidateBackgroundCorner", draft.candidateBackgroundCorner)
+                    put("candidateBackgroundLeftMarginDp", draft.candidateBackgroundLeftMarginDp)
+                    put("candidatePinyinLeftMarginDp", draft.candidatePinyinLeftMarginDp)
+                    put("toolbarIconBgOpacity", draft.toolbarIconBgOpacity)
+                    put("customIconPath", draft.customIconPath)
+                    put("iconScale", draft.iconScale)
+                    GlassOverrideField.entries.forEach { field ->
+                        put("glass:${field.name}", draft.glassInput[field.ordinal])
+                        put("previewGlass:${field.name}", draft.previewGlassOverrides.text(field))
+                    }
+                    WeTypeAppearanceColorGroups.groups.forEachIndexed { index, group ->
+                        put("color:${group.id}", draft.appearanceGroupColors[index])
+                    }
+                }
+            },
+            restore = { values ->
+                AppearanceDraft(WeTypeSettings.defaultSnapshot(false)).apply {
+                    backgroundColor = values["backgroundColor"] as Int
+                    followingColors = (values["followingColors"] as? List<*>)?.filterIsInstance<String>()?.toSet().orEmpty()
+                    hyperMaterialEnabled = values["hyperMaterialEnabled"] as Boolean
+                    blurRadius = values["blurRadius"] as Int
+                    cornerRadius = values["cornerRadius"] as Int
+                    keyCornerRadius = values["keyCornerRadius"] as Int
+                    edgeHighlightEnabled = values["edgeHighlightEnabled"] as Boolean
+                    edgeHighlightIntensity = values["edgeHighlightIntensity"] as Int
+                    candidateBackgroundAlpha = values["candidateBackgroundAlpha"] as Int
+                    candidateBackgroundCorner = values["candidateBackgroundCorner"] as Int
+                    candidateBackgroundLeftMarginDp = values["candidateBackgroundLeftMarginDp"] as String
+                    candidatePinyinLeftMarginDp = values["candidatePinyinLeftMarginDp"] as String
+                    toolbarIconBgOpacity = values["toolbarIconBgOpacity"] as Int
+                    customIconPath = values["customIconPath"] as String
+                    iconScale = values["iconScale"] as Float
+                    GlassOverrideField.entries.forEach { field ->
+                        glassInput[field.ordinal] = values["glass:${field.name}"] as? String ?: ""
+                    }
+                    previewGlassOverrides = GlassMaterialOverrides.parse(
+                        GlassOverrideField.entries.associateWith { values["previewGlass:${it.name}"] as? String ?: "" }
+                    )
+                    WeTypeAppearanceColorGroups.groups.forEachIndexed { index, group ->
+                        appearanceGroupColors[index] = values["color:${group.id}"] as? Int ?: group.defaultColor
+                    }
+                }
+            }
+        )
+    }
+}
+
 @Composable
 private fun WeTypeSettingsScreen(
     settingsContext: Context
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val preferencesContext = remember(settingsContext) { settingsContext }
     val isEmbeddedHost = remember(settingsContext) {
         (context.applicationContext ?: context).packageName != "com.xposed.wetypehook"
     }
-    val snapshot = remember(preferencesContext) { WeTypeSettings.readSnapshot(preferencesContext) }
+    val profiles = remember(preferencesContext) { WeTypeSettings.readProfiles(preferencesContext) }
     val hostActivity = remember(preferencesContext) { preferencesContext.findHostActivity() }
     var launcherIconHidden by remember(hostActivity) { mutableStateOf<Boolean?>(null) }
     var launcherIconRequestCode by remember(hostActivity) { mutableStateOf<Int?>(null) }
 
-    fun requestLauncherIcon(hidden: Boolean? = null, onSuccess: (() -> Unit)? = null) {
+    fun requestLauncherIcon(hidden: Boolean? = null) {
         if (launcherIconRequestCode != null) return
         val activity = hostActivity ?: return
         val requestCode = HostActivityResultBridge.registerResult { resultCode, data ->
             launcherIconRequestCode = null
             if (resultCode == Activity.RESULT_OK && data?.hasExtra(LauncherIconContract.EXTRA_HIDDEN) == true) {
                 launcherIconHidden = data.getBooleanExtra(LauncherIconContract.EXTRA_HIDDEN, false)
-                onSuccess?.invoke()
             } else {
                 Toast.makeText(context, R.string.settings_launcher_icon_failed, Toast.LENGTH_SHORT).show()
             }
@@ -477,22 +624,22 @@ private fun WeTypeSettingsScreen(
         appearanceGroups.filterNot { it.isKeyColorGroup }
     }
 
-    var lightColor by rememberSaveable { mutableIntStateOf(snapshot.lightColor) }
-    var darkColor by rememberSaveable { mutableIntStateOf(snapshot.darkColor) }
-    val glassInput = rememberSaveable(
-        saver = listSaver(save = { it.toList() }, restore = { mutableStateListOf(*it.toTypedArray()) })
-    ) { mutableStateListOf(*GlassOverrideField.entries.map { snapshot.glassOverrides.text(it) }.toTypedArray()) }
+    var lightDraft by rememberSaveable(stateSaver = AppearanceDraft.Saver) {
+        mutableStateOf(AppearanceDraft(profiles.light.copy(followingColors = profiles.profile(false).followingColors)))
+    }
+    var darkDraft by rememberSaveable(stateSaver = AppearanceDraft.Saver) {
+        mutableStateOf(AppearanceDraft(profiles.dark.copy(followingColors = profiles.profile(true).followingColors)))
+    }
+    var currentModeIsDark by rememberSaveable { mutableStateOf(systemDarkMode) }
+    val draft = if (currentModeIsDark) darkDraft else lightDraft
+    var disableHotUpdate by rememberSaveable { mutableStateOf(profiles.disableHotUpdate) }
     val glassSupported = remember { WeTypeHyperMaterial.areGlassOverridesAvailable() }
-    val parsedGlassOverrides = runCatching {
-        GlassMaterialOverrides.parse(GlassOverrideField.entries.associateWith { glassInput[it.ordinal] })
-    }.getOrNull()
-    var previewGlassOverrides by remember { mutableStateOf(snapshot.glassOverrides) }
-    LaunchedEffect(parsedGlassOverrides) {
+    val parsedGlassOverrides = draft.parsedGlassOverrides()
+    LaunchedEffect(draft, parsedGlassOverrides) {
         // Recreating a native material during every slider tick would flash its fallback tint.
         delay(120)
-        parsedGlassOverrides?.let { previewGlassOverrides = it }
+        parsedGlassOverrides?.let { draft.previewGlassOverrides = it }
     }
-    var hyperMaterialEnabled by rememberSaveable { mutableStateOf(snapshot.hyperMaterialEnabled) }
     var hyperMaterialAvailable by remember(preferencesContext) {
         mutableStateOf(WeTypeHyperMaterial.isAvailable(preferencesContext))
     }
@@ -502,116 +649,59 @@ private fun WeTypeSettingsScreen(
         }
         onDispose { stopObserving() }
     }
-    var blurRadius by rememberSaveable { mutableIntStateOf(snapshot.blurRadius) }
-    var cornerRadius by rememberSaveable { mutableIntStateOf(snapshot.cornerRadius) }
-    var keyCornerRadius by rememberSaveable { mutableIntStateOf(snapshot.keyCornerRadius) }
-    var edgeHighlightEnabled by rememberSaveable { mutableStateOf(snapshot.edgeHighlightEnabled) }
-    var edgeHighlightIntensity by rememberSaveable { mutableIntStateOf(snapshot.edgeHighlightIntensity) }
-    var candidateBackgroundAlpha by rememberSaveable {
-        mutableIntStateOf(snapshot.candidateBackgroundAlpha)
-    }
-    var candidateBackgroundCorner by rememberSaveable {
-        mutableIntStateOf(snapshot.candidateBackgroundCorner.roundToInt())
-    }
-    var candidateBackgroundLeftMarginDp by rememberSaveable {
-        mutableStateOf(snapshot.candidateBackgroundLeftMarginDp.toString())
-    }
-    var candidatePinyinLeftMarginDp by rememberSaveable {
-        mutableStateOf(snapshot.candidatePinyinLeftMarginDp.toString())
-    }
-    var toolbarIconBgOpacity by rememberSaveable {
-        mutableIntStateOf(snapshot.toolbarIconBgOpacity)
-    }
-    var customIconPath by rememberSaveable { mutableStateOf(snapshot.customIconPath) }
-    var iconScale by rememberSaveable { mutableFloatStateOf(snapshot.iconScale) }
-    var disableHotUpdate by rememberSaveable {
-        mutableStateOf(snapshot.disableHotUpdate)
-    }
-    val appearanceGroupColors = rememberSaveable(
-        saver = listSaver(
-            save = { it.toList() },
-            restore = { restored -> mutableStateListOf(*restored.toTypedArray()) }
-        )
-    ) {
-        mutableStateListOf(
-            *appearanceGroups.map { group ->
-                snapshot.appearanceColors[group.id] ?: group.defaultColor
-            }.toTypedArray()
-        )
-    }
-    var currentModeIsDark by rememberSaveable { mutableStateOf(systemDarkMode) }
-    var colorInput by rememberSaveable {
-        mutableStateOf(formatRgb(if (currentModeIsDark) darkColor else lightColor))
-    }
-    var alphaValue by rememberSaveable {
-        mutableIntStateOf(Color.alpha(if (currentModeIsDark) darkColor else lightColor))
-    }
-
-    fun currentColor(): Int = if (currentModeIsDark) darkColor else lightColor
-
-    fun syncEditorFromState() {
-        alphaValue = Color.alpha(currentColor())
-        colorInput = formatRgb(currentColor())
-    }
-
-    fun updateColorFromArgb(argb: Int) {
-        if (currentModeIsDark) darkColor = argb else lightColor = argb
-    }
-
-    fun currentAppearanceColors(): Map<String, Int> = appearanceGroups.mapIndexed { index, group ->
-        group.id to appearanceGroupColors[index]
-    }.toMap()
-
-    fun groupIndex(groupId: String): Int =
-        appearanceGroups.indexOfFirst { it.id == groupId }
 
     fun keyColorGroup(isDark: Boolean) = appearanceGroups.first {
-        it.id == if (isDark) {
-            DARK_KEY_COLOR_GROUP_ID
+        it.id == if (isDark) DARK_KEY_COLOR_GROUP_ID else LIGHT_KEY_COLOR_GROUP_ID
+    }
+
+    fun profileDraft(isDark: Boolean): AppearanceDraft = if (isDark) darkDraft else lightDraft
+
+    fun effectiveColor(colorId: String, isDark: Boolean = currentModeIsDark): Int =
+        profileDraft(isDark).resolvedColor(colorId, profileDraft(!isDark))
+
+    fun keyColorValue(isDark: Boolean): Int = effectiveColor(keyColorGroup(isDark).id, isDark)
+
+    fun applyColor(colorId: String, color: Int, following: Boolean) {
+        val opposite = profileDraft(!currentModeIsDark)
+        val oppositeId = WeTypeSettings.oppositeColorId(colorId)
+        if (following && oppositeId in opposite.followingColors) {
+            // Reverse a link by freezing its current visible color before removing the old link.
+            opposite.setColor(oppositeId, effectiveColor(oppositeId, !currentModeIsDark))
+            opposite.followingColors -= oppositeId
+        }
+        if (following) {
+            draft.followingColors += colorId
         } else {
-            LIGHT_KEY_COLOR_GROUP_ID
+            draft.setColor(colorId, color)
+            draft.followingColors -= colorId
         }
     }
 
-    fun keyColorValue(isDark: Boolean): Int {
-        val group = keyColorGroup(isDark)
-        return appearanceGroupColors[groupIndex(group.id)]
-    }
-
-    fun saveSettings(
-        successMessage: Int = R.string.settings_saved,
-        glassOverridesToSave: GlassMaterialOverrides? = parsedGlassOverrides
-    ): Boolean {
-        if (glassOverridesToSave == null) {
-            Toast.makeText(context, R.string.settings_glass_invalid, Toast.LENGTH_SHORT).show()
-            return false
+    fun saveSettings(): Boolean {
+        for ((isDark, profileDraft) in listOf(false to lightDraft, true to darkDraft)) {
+            val error = profileDraft.validationError()
+            if (error != null) {
+                val mode = resources.getString(if (isDark) R.string.settings_dark_mode else R.string.settings_light_mode)
+                Toast.makeText(
+                    context,
+                    resources.getString(R.string.settings_profile_invalid, mode, resources.getString(error)),
+                    Toast.LENGTH_LONG
+                ).show()
+                currentModeIsDark = isDark
+                return false
+            }
         }
         return WeTypeSettings.save(
             context = preferencesContext,
-            lightColor = lightColor,
-            darkColor = darkColor,
-            blurRadius = blurRadius,
-            cornerRadius = cornerRadius,
-            keyCornerRadius = keyCornerRadius,
-            edgeHighlightEnabled = edgeHighlightEnabled,
-            edgeHighlightIntensity = edgeHighlightIntensity,
-            candidateBackgroundAlpha = candidateBackgroundAlpha,
-            candidateBackgroundCorner = candidateBackgroundCorner.toFloat(),
-            candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.toIntOrNull()
-                ?: WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
-            candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.toIntOrNull()
-                ?: WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
-            toolbarIconBgOpacity = toolbarIconBgOpacity,
-            appearanceColors = currentAppearanceColors(),
-            customIconPath = customIconPath,
-            iconScale = iconScale,
-            disableHotUpdate = disableHotUpdate,
-            hyperMaterialEnabled = hyperMaterialEnabled,
-            glassOverrides = glassOverridesToSave,
+            profiles = WeTypeSettings.Profiles(
+                light = lightDraft.toSnapshot(),
+                dark = darkDraft.toSnapshot(),
+                disableHotUpdate = disableHotUpdate
+            ),
             onPersisted = { saved ->
                 Toast.makeText(
                     context,
-                    if (saved) successMessage else R.string.settings_save_failed,
+                    if (saved) R.string.settings_saved else R.string.settings_save_failed,
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -619,36 +709,9 @@ private fun WeTypeSettingsScreen(
     }
 
     fun restoreDefaults() {
-        lightColor = WeTypeSettings.DEFAULT_LIGHT_COLOR
-        darkColor = WeTypeSettings.DEFAULT_DARK_COLOR
-        glassInput.indices.forEach { glassInput[it] = "" }
-        previewGlassOverrides = GlassMaterialOverrides()
-        hyperMaterialEnabled = WeTypeSettings.DEFAULT_HYPER_MATERIAL_ENABLED
-        blurRadius = WeTypeSettings.DEFAULT_BLUR_RADIUS
-        cornerRadius = WeTypeSettings.DEFAULT_CORNER_RADIUS
-        keyCornerRadius = WeTypeSettings.DEFAULT_KEY_CORNER_RADIUS
-        edgeHighlightEnabled = WeTypeSettings.DEFAULT_EDGE_HIGHLIGHT_ENABLED
-        edgeHighlightIntensity = WeTypeSettings.DEFAULT_EDGE_HIGHLIGHT_INTENSITY
-        candidateBackgroundAlpha = WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_ALPHA
-        candidateBackgroundCorner = WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_CORNER.roundToInt()
-        candidateBackgroundLeftMarginDp =
-            WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP.toString()
-        candidatePinyinLeftMarginDp = WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP.toString()
-        toolbarIconBgOpacity = WeTypeSettings.DEFAULT_TOOLBAR_ICON_BG_OPACITY
-        customIconPath = WeTypeSettings.DEFAULT_CUSTOM_ICON_PATH
-        iconScale = WeTypeSettings.DEFAULT_ICON_SCALE
-        disableHotUpdate = WeTypeSettings.DEFAULT_DISABLE_HOT_UPDATE
-        appearanceGroups.forEachIndexed { index, group ->
-            appearanceGroupColors[index] = group.defaultColor
-        }
-        syncEditorFromState()
-        if (launcherIconHidden != false) {
-            requestLauncherIcon(hidden = false) {
-                saveSettings(successMessage = R.string.settings_reset_toast, glassOverridesToSave = GlassMaterialOverrides())
-            }
-        } else {
-            saveSettings(successMessage = R.string.settings_reset_toast, glassOverridesToSave = GlassMaterialOverrides())
-        }
+        val defaults = AppearanceDraft(WeTypeSettings.defaultSnapshot(currentModeIsDark))
+        if (currentModeIsDark) darkDraft = defaults else lightDraft = defaults
+        Toast.makeText(context, R.string.settings_reset_toast, Toast.LENGTH_SHORT).show()
     }
 
     if (isEmbeddedHost) {
@@ -666,7 +729,6 @@ private fun WeTypeSettingsScreen(
         }
     }
 
-    val previewColor = currentColor()
     val scrollBehavior = MiuixScrollBehavior(state = rememberTopAppBarState())
 
     Scaffold(
@@ -674,40 +736,53 @@ private fun WeTypeSettingsScreen(
             .fillMaxSize()
             .background(MiuixTheme.colorScheme.background),
         topBar = {
-            TopAppBar(
-                title = stringResource(R.string.settings_title),
-                scrollBehavior = scrollBehavior,
-                navigationIcon = {
-                    ModuleActivationTag(
-                        status = activationStatus,
-                    )
-                },
-                actions = {
-                    IconButton(
-                        onClick = { saveSettings() }
-                    ) {
-                        Icon(
-                            imageVector = MiuixIcons.Ok,
-                            contentDescription = stringResource(R.string.settings_save_title)
+            Column(modifier = Modifier.background(MiuixTheme.colorScheme.surface)) {
+                TopAppBar(
+                    title = stringResource(R.string.settings_title),
+                    scrollBehavior = scrollBehavior,
+                    navigationIcon = {
+                        ModuleActivationTag(
+                            status = activationStatus,
                         )
-                    }
-                },
-                bottomContent = {
-                    PreviewSection(
-                        glassOverrides = previewGlassOverrides,
-                        hyperMaterialEnabled = hyperMaterialEnabled,
-                        color = previewColor,
-                        blurRadius = blurRadius,
-                        cornerRadius = cornerRadius,
-                        keyCornerRadius = keyCornerRadius,
-                        edgeHighlightEnabled = edgeHighlightEnabled,
-                        edgeHighlightIntensity = edgeHighlightIntensity,
-                        lightKeyColor = keyColorValue(false),
-                        darkKeyColor = keyColorValue(true),
-                        isDark = currentModeIsDark
-                    )
-                }
-            )
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = { saveSettings() }
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.Ok,
+                                contentDescription = stringResource(R.string.settings_save_title)
+                            )
+                        }
+                    },
+                )
+                TabRowWithContour(
+                    tabs = listOf(
+                        stringResource(R.string.settings_light_mode),
+                        stringResource(R.string.settings_dark_mode)
+                    ),
+                    selectedTabIndex = if (currentModeIsDark) 1 else 0,
+                    onTabSelected = { currentModeIsDark = it == 1 },
+                    height = 40.dp,
+                    itemSpacing = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                )
+                PreviewSection(
+                    glassOverrides = draft.previewGlassOverrides,
+                    hyperMaterialEnabled = draft.hyperMaterialEnabled,
+                    color = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID),
+                    blurRadius = draft.blurRadius,
+                    cornerRadius = draft.cornerRadius,
+                    keyCornerRadius = draft.keyCornerRadius,
+                    edgeHighlightEnabled = draft.edgeHighlightEnabled,
+                    edgeHighlightIntensity = draft.edgeHighlightIntensity,
+                    lightKeyColor = keyColorValue(false),
+                    darkKeyColor = keyColorValue(true),
+                    isDark = currentModeIsDark
+                )
+            }
         }
     ) { paddingValues ->
         LazyColumn(
@@ -731,109 +806,54 @@ private fun WeTypeSettingsScreen(
                     insideMargin = PaddingValues(0.dp)
                 ) {
                     Column {
-                        // 模式切换 - 使用 TabRow
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.settings_section_mode),
-                                style = MiuixTheme.textStyles.main
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            val tabs = listOf(
-                                stringResource(R.string.settings_light_mode),
-                                stringResource(R.string.settings_dark_mode)
-                            )
-                            TabRowWithContour(
-                                tabs = tabs,
-                                selectedTabIndex = if (currentModeIsDark) 1 else 0,
-                                onTabSelected = { index ->
-                                    val newDarkMode = index == 1
-                                    if (newDarkMode != currentModeIsDark) {
-                                        currentModeIsDark = newDarkMode
-                                        syncEditorFromState()
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
                         // 透明度滑块
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_alpha_title),
-                            value = alphaValue,
+                            value = Color.alpha(effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID)),
                             max = 255,
+                            enabled = WeTypeSettings.BACKGROUND_COLOR_ID !in draft.followingColors,
                             onValueChange = {
-                                alphaValue = it
-                                val rgb = currentColor() and 0xFFFFFF
-                                updateColorFromArgb((alphaValue shl 24) or rgb)
-                                colorInput = formatRgb(currentColor())
+                                val rgb = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID) and 0xFFFFFF
+                                draft.backgroundColor = (it shl 24) or rgb
                             }
                         )
 
-                        Column(
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.settings_custom_color),
-                                style = MiuixTheme.textStyles.main
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = stringResource(R.string.settings_color_helper),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.body2
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            TextField(
-                                value = colorInput,
-                                onValueChange = { input ->
-                                    val trimmed = input.trim()
-                                    val hasPrefix = trimmed.startsWith("#")
-                                    val body = trimmed.removePrefix("#")
-                                    if (body.length > 6 || !body.matches(Regex("^[0-9a-fA-F]*$"))) {
-                                        return@TextField
-                                    }
-
-                                    colorInput = if (hasPrefix || body.isNotEmpty()) "#$body" else ""
-
-                                    if (body.length == 6) {
-                                        runCatching {
-                                            val opaque = Color.parseColor("#$body")
-                                            val argb = Color.argb(
-                                                alphaValue.coerceIn(0, 255),
-                                                Color.red(opaque),
-                                                Color.green(opaque),
-                                                Color.blue(opaque)
-                                            )
-                                            updateColorFromArgb(argb)
-                                        }
-                                    }
-                                },
-                                label = stringResource(R.string.settings_color_label),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                        ColorPreferenceItem(
+                            title = stringResource(R.string.settings_custom_color),
+                            color = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID),
+                            isDark = currentModeIsDark,
+                            followsOtherMode = WeTypeSettings.BACKGROUND_COLOR_ID in draft.followingColors,
+                            sourceColor = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID, !currentModeIsDark),
+                            onColorChange = { color, following ->
+                                applyColor(WeTypeSettings.BACKGROUND_COLOR_ID, color, following)
+                            }
+                        )
 
                         val currentKeyGroup = keyColorGroup(currentModeIsDark)
-                        val currentKeyGroupIndex = groupIndex(currentKeyGroup.id)
 
-                        KeyColorEditor(
+                        ColorPreferenceItem(
                             title = if (currentModeIsDark) {
                                 stringResource(R.string.settings_dark_key_color_title)
                             } else {
                                 stringResource(R.string.settings_light_key_color_title)
                             },
-                            summary = stringResource(
-                                R.string.settings_key_color_group_summary,
-                                Color.alpha(appearanceGroupColors[currentKeyGroupIndex]),
-                                currentKeyGroup.entryCount
+                            color = effectiveColor(currentKeyGroup.id),
+                            isDark = currentModeIsDark,
+                            followsOtherMode = currentKeyGroup.id in draft.followingColors,
+                            sourceColor = effectiveColor(
+                                WeTypeSettings.oppositeColorId(currentKeyGroup.id), !currentModeIsDark
                             ),
-                            color = appearanceGroupColors[currentKeyGroupIndex],
-                            onColorChange = { appearanceGroupColors[currentKeyGroupIndex] = it }
+                            onColorChange = { color, following -> applyColor(currentKeyGroup.id, color, following) }
+                        )
+                        SliderPreferenceItem(
+                            title = stringResource(R.string.settings_key_opacity_title),
+                            value = Color.alpha(effectiveColor(currentKeyGroup.id)),
+                            max = 255,
+                            enabled = currentKeyGroup.id !in draft.followingColors,
+                            onValueChange = { alpha ->
+                                val rgb = effectiveColor(currentKeyGroup.id) and 0xFFFFFF
+                                draft.setColor(currentKeyGroup.id, (alpha shl 24) or rgb)
+                            }
                         )
                     }
                 }
@@ -855,38 +875,38 @@ private fun WeTypeSettingsScreen(
                                 if (hyperMaterialAvailable) R.string.settings_hyper_material_desc
                                 else R.string.settings_hyper_material_unavailable
                             ),
-                            checked = hyperMaterialEnabled,
+                            checked = draft.hyperMaterialEnabled,
                             enabled = hyperMaterialAvailable,
-                            onCheckedChange = { hyperMaterialEnabled = it }
+                            onCheckedChange = { draft.hyperMaterialEnabled = it }
                         )
-                        if (hyperMaterialEnabled) {
+                        if (draft.hyperMaterialEnabled) {
                             HorizontalDivider()
                             GlassOverrideEditor(
-                                values = glassInput,
+                                values = draft.glassInput,
                                 enabled = hyperMaterialAvailable && glassSupported,
-                                onValueChange = { index, value -> glassInput[index] = value },
+                                onValueChange = { index, value -> draft.glassInput[index] = value },
                                 onReset = {
                                     val defaults = GlassMaterialOverrides().withGlassEnabled(true)
-                                    GlassOverrideField.entries.forEach { glassInput[it.ordinal] = defaults.text(it) }
+                                    GlassOverrideField.entries.forEach { draft.glassInput[it.ordinal] = defaults.text(it) }
                                 }
                             )
                         }
                         HorizontalDivider()
                         MiuixSwitchWidget(
-                            enabled = !hyperMaterialEnabled,
+                            enabled = !draft.hyperMaterialEnabled,
                             title = stringResource(R.string.settings_edge_highlight_title),
                             description = stringResource(R.string.settings_edge_highlight_desc),
-                            checked = edgeHighlightEnabled,
-                            onCheckedChange = { edgeHighlightEnabled = it }
+                            checked = draft.edgeHighlightEnabled,
+                            onCheckedChange = { draft.edgeHighlightEnabled = it }
                         )
 
-                        if (edgeHighlightEnabled) {
+                        if (draft.edgeHighlightEnabled) {
                             SliderPreferenceItem(
                                 title = stringResource(R.string.settings_edge_highlight_intensity_title),
-                                enabled = !hyperMaterialEnabled,
-                                value = edgeHighlightIntensity,
+                                enabled = !draft.hyperMaterialEnabled,
+                                value = draft.edgeHighlightIntensity,
                                 max = 200,
-                                onValueChange = { edgeHighlightIntensity = it }
+                                onValueChange = { draft.edgeHighlightIntensity = it }
                             )
                         }
 
@@ -895,77 +915,67 @@ private fun WeTypeSettingsScreen(
                         // 模糊滑块
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_blur_title),
-                            enabled = !hyperMaterialEnabled,
-                            value = blurRadius,
+                            enabled = !draft.hyperMaterialEnabled,
+                            value = draft.blurRadius,
                             max = 100,
-                            onValueChange = { blurRadius = it }
+                            onValueChange = { draft.blurRadius = it }
                         )
 
                         // 圆角滑块
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_corner_title),
-                            value = cornerRadius,
+                            value = draft.cornerRadius,
                             max = WeTypeSettings.MAX_CORNER_RADIUS,
-                            onValueChange = { cornerRadius = it }
+                            onValueChange = { draft.cornerRadius = it }
                         )
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_key_corner_title),
-                            value = keyCornerRadius,
+                            value = draft.keyCornerRadius,
                             max = WeTypeSettings.MAX_KEY_CORNER_RADIUS,
-                            onValueChange = { keyCornerRadius = it }
+                            onValueChange = { draft.keyCornerRadius = it }
                         )
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_toolbar_icon_bg_opacity_title),
-                            value = toolbarIconBgOpacity,
+                            value = draft.toolbarIconBgOpacity,
                             max = 255,
-                            onValueChange = { toolbarIconBgOpacity = it }
+                            onValueChange = { draft.toolbarIconBgOpacity = it }
                         )
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_icon_scale_title),
-                            value = iconScale,
+                            value = draft.iconScale,
                             range = WeTypeSettings.MIN_ICON_SCALE..WeTypeSettings.MAX_ICON_SCALE,
                             step = 0.05f,
                             format = { "${(it * 100).roundToInt()}%" },
-                            onValueChange = { iconScale = it }
+                            onValueChange = { draft.iconScale = it }
                         )
 
                         IconShapePreferenceItem(
-                            value = customIconPath,
-                            onValueChange = { customIconPath = it },
-                            onReset = { customIconPath = WeTypeSettings.DEFAULT_CUSTOM_ICON_PATH }
+                            value = draft.customIconPath,
+                            onValueChange = { draft.customIconPath = it },
+                            onReset = { draft.customIconPath = WeTypeSettings.DEFAULT_CUSTOM_ICON_PATH }
                         )
 
                         appearanceSectionGroups.forEach { group ->
-                            val index = groupIndex(group.id)
-                            AppearanceColorGroupEditor(
+                            ColorPreferenceItem(
                                 title = group.displayName,
-                                summary = if (group.entryCount == 0) {
-                                    stringResource(
-                                        R.string.settings_module_color_summary,
-                                        formatArgb(group.defaultColor)
-                                    )
-                                } else {
-                                    stringResource(
-                                        R.string.settings_appearance_color_group_summary,
-                                        group.entryCount,
-                                        formatArgb(group.defaultColor)
-                                    )
-                                },
-                                color = appearanceGroupColors[index],
-                                onColorChange = { appearanceGroupColors[index] = it }
+                                color = effectiveColor(group.id),
+                                isDark = currentModeIsDark,
+                                followsOtherMode = group.id in draft.followingColors,
+                                sourceColor = effectiveColor(WeTypeSettings.oppositeColorId(group.id), !currentModeIsDark),
+                                onColorChange = { color, following -> applyColor(group.id, color, following) }
                             )
                         }
 
                         NumericTextSettingItem(
                             title = stringResource(R.string.settings_candidate_background_left_margin_title),
                             summary = stringResource(R.string.settings_candidate_background_left_margin_desc),
-                            value = candidateBackgroundLeftMarginDp,
+                            value = draft.candidateBackgroundLeftMarginDp,
                             onValueChange = { input ->
                                 if (sanitizeIntegerInput(input, maxLength = 2) != null) {
-                                    candidateBackgroundLeftMarginDp = input
+                                    draft.candidateBackgroundLeftMarginDp = input
                                 }
                             }
                         )
@@ -973,26 +983,26 @@ private fun WeTypeSettingsScreen(
                         NumericTextSettingItem(
                             title = stringResource(R.string.settings_candidate_pinyin_margin_title),
                             summary = stringResource(R.string.settings_candidate_pinyin_margin_desc),
-                            value = candidatePinyinLeftMarginDp,
+                            value = draft.candidatePinyinLeftMarginDp,
                             onValueChange = { input ->
                                 if (sanitizeIntegerInput(input, maxLength = 2) != null) {
-                                    candidatePinyinLeftMarginDp = input
+                                    draft.candidatePinyinLeftMarginDp = input
                                 }
                             }
                         )
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_key_color_hook_alpha_title),
-                            value = candidateBackgroundAlpha,
+                            value = draft.candidateBackgroundAlpha,
                             max = 255,
-                            onValueChange = { candidateBackgroundAlpha = it }
+                            onValueChange = { draft.candidateBackgroundAlpha = it }
                         )
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_candidate_corner_title),
-                            value = candidateBackgroundCorner,
+                            value = draft.candidateBackgroundCorner,
                             max = WeTypeSettings.MAX_CANDIDATE_BACKGROUND_CORNER,
-                            onValueChange = { candidateBackgroundCorner = it }
+                            onValueChange = { draft.candidateBackgroundCorner = it }
                         )
                     }
                 }
@@ -1042,7 +1052,6 @@ private fun WeTypeSettingsScreen(
                         ArrowPreference(
                             title = stringResource(R.string.settings_reset_title),
                             summary = stringResource(R.string.settings_reset_desc),
-                            enabled = launcherIconRequestCode == null,
                             onClick = ::restoreDefaults
                         )
 
@@ -1116,9 +1125,6 @@ private fun PreviewSection(
     Column(
         modifier = Modifier.padding(bottom = 16.dp)
     ) {
-        SmallTitle(
-            text = stringResource(R.string.settings_preview_title)
-        )
         Card(
             modifier = Modifier.padding(horizontal = 16.dp),
             insideMargin = PaddingValues(0.dp),
@@ -1736,133 +1742,172 @@ private fun IconShapePreferenceItem(
 }
 
 @Composable
-private fun AppearanceColorGroupEditor(
+private fun ColorPreferenceItem(
     title: String,
-    summary: String,
     color: Int,
-    onColorChange: (Int) -> Unit
+    isDark: Boolean,
+    followsOtherMode: Boolean,
+    sourceColor: Int,
+    onColorChange: (Int, Boolean) -> Unit
 ) {
-    var input by rememberSaveable(title) { mutableStateOf(formatArgb(color)) }
+    var showDialog by rememberSaveable { mutableStateOf(false) }
+    var selectedColor by rememberSaveable { mutableIntStateOf(color) }
+    var followingDraft by rememberSaveable { mutableStateOf(followsOtherMode) }
+    var hexInput by rememberSaveable { mutableStateOf(formatArgb(color)) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val parsedColor = parseEditorColor(hexInput, selectedColor)
+    val followTitle = stringResource(
+        if (isDark) R.string.settings_color_follow_light else R.string.settings_color_follow_dark
+    )
+    val displayedColor = if (followingDraft) sourceColor else selectedColor
 
-    LaunchedEffect(color) {
-        val formatted = formatArgb(color)
-        if (!input.equals(formatted, ignoreCase = true) && parseHexColor(input) != color) {
-            input = formatted
-        }
+    fun dismiss() {
+        keyboardController?.hide()
+        showDialog = false
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(32.dp)
-                    .height(32.dp)
-                    .clip(ContinuousRoundedRectangle(999.dp))
-                    .background(ComposeColor(color))
-                    .border(1.dp, MiuixTheme.colorScheme.outline, ContinuousRoundedRectangle(999.dp))
+    ArrowPreference(
+        title = title,
+        summary = if (followsOtherMode) {
+            stringResource(R.string.settings_color_follow_summary, formatArgb(color), followTitle)
+        } else {
+            formatArgb(color)
+        },
+        startAction = {
+            ColorSwatch(
+                color = color,
+                modifier = Modifier.padding(end = 16.dp).size(36.dp)
             )
-            Spacer(modifier = Modifier.width(12.dp))
+        },
+        onClick = {
+            selectedColor = color
+            followingDraft = followsOtherMode
+            hexInput = formatArgb(color)
+            showDialog = true
+        }
+    )
+
+    OverlayDialog(
+        show = showDialog,
+        title = title,
+        onDismissRequest = ::dismiss
+    ) {
+        // The dialog handles IME insets; only the editor scrolls so its actions stay visible.
+        Column(modifier = Modifier.fillMaxWidth()) {
             Column(
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    text = title,
-                    style = MiuixTheme.textStyles.main
+                SwitchPreference(
+                    checked = followingDraft,
+                    onCheckedChange = { following ->
+                        if (!following) {
+                            selectedColor = sourceColor
+                            hexInput = formatArgb(sourceColor)
+                        }
+                        keyboardController?.hide()
+                        followingDraft = following
+                    },
+                    title = followTitle,
+                    summary = stringResource(R.string.settings_color_follow_description),
+                    insideMargin = PaddingValues(vertical = 8.dp)
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = summary,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    style = MiuixTheme.textStyles.body2
+                ColorSwatch(
+                    color = displayedColor,
+                    modifier = Modifier.fillMaxWidth().height(32.dp)
+                )
+                if (followingDraft) {
+                    Text(
+                        text = formatArgb(sourceColor),
+                        style = MiuixTheme.textStyles.body1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    )
+                } else {
+                    ColorPalette(
+                        color = ComposeColor(selectedColor),
+                        onColorChanged = { value ->
+                            selectedColor = value.toArgb()
+                            hexInput = formatArgb(selectedColor)
+                        },
+                        showPreview = false
+                    )
+                    TextField(
+                        value = hexInput,
+                        onValueChange = { raw ->
+                            val sanitized = sanitizeHexColorInput(raw) ?: return@TextField
+                            hexInput = sanitized
+                            parseEditorColor(sanitized, selectedColor)?.let { selectedColor = it }
+                        },
+                        label = stringResource(R.string.settings_color_hex_label),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = stringResource(
+                            if (parsedColor == null) R.string.settings_color_hex_invalid
+                            else R.string.settings_color_hex_helper
+                        ),
+                        color = if (parsedColor == null) MiuixTheme.colorScheme.error
+                            else MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        style = MiuixTheme.textStyles.body2
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TextButton(
+                    text = stringResource(R.string.settings_cancel),
+                    onClick = ::dismiss,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    text = stringResource(R.string.settings_confirm),
+                    onClick = {
+                        if (followingDraft) onColorChange(sourceColor, true)
+                        else parsedColor?.let { onColorChange(it, false) }
+                        dismiss()
+                    },
+                    enabled = followingDraft || parsedColor != null,
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
-        TextField(
-            value = input,
-            onValueChange = { raw ->
-                val sanitized = sanitizeHexColorInput(raw) ?: return@TextField
-                input = sanitized
-                parseHexColor(sanitized)?.let(onColorChange)
-            },
-            label = stringResource(R.string.settings_appearance_color_input_label),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
 @Composable
-private fun KeyColorEditor(
-    title: String,
-    summary: String,
-    color: Int,
-    onColorChange: (Int) -> Unit
-) {
-    var input by rememberSaveable(title) { mutableStateOf(formatRgb(color)) }
-
-    LaunchedEffect(color) {
-        val formatted = formatRgb(color)
-        val normalizedColor = Color.rgb(Color.red(color), Color.green(color), Color.blue(color))
-        if (!input.equals(formatted, ignoreCase = true) && parseRgbColor(input) != normalizedColor) {
-            input = formatted
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 16.dp)
-        ) {
-            Text(
-                text = title,
-                style = MiuixTheme.textStyles.main
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = summary,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                style = MiuixTheme.textStyles.body2
-            )
-        }
-        // Per-mode key opacity, baked directly into the key color's alpha channel (same logic as
-        // the background opacity slider above).
-        SliderPreferenceItem(
-            title = stringResource(R.string.settings_key_opacity_title),
-            value = Color.alpha(color),
-            max = 255,
-            onValueChange = { alpha ->
-                onColorChange((alpha shl 24) or (color and 0xFFFFFF))
-            }
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-        ) {
-            TextField(
-                value = input,
-                onValueChange = { raw ->
-                    val sanitized = sanitizeRgbColorInput(raw) ?: return@TextField
-                    input = sanitized
-                    parseRgbColor(sanitized)?.let { rgb ->
-                        onColorChange((color and 0xFF000000.toInt()) or (rgb and 0xFFFFFF))
+private fun ColorSwatch(color: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(ContinuousRoundedRectangle(10.dp))
+            .drawWithCache {
+                val tileSize = 6.dp.toPx()
+                onDrawBehind {
+                    drawRect(ComposeColor(0xFFF2F2F2))
+                    val columns = (size.width / tileSize).toInt() + 1
+                    val rows = (size.height / tileSize).toInt() + 1
+                    for (row in 0 until rows) {
+                        for (column in 0 until columns) {
+                            if ((row + column) % 2 == 0) {
+                                drawRect(
+                                    color = ComposeColor(0xFFBDBDBD),
+                                    topLeft = Offset(column * tileSize, row * tileSize),
+                                    size = Size(tileSize, tileSize)
+                                )
+                            }
+                        }
                     }
-                },
-                label = stringResource(R.string.settings_key_color_input_label),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
+                    drawRect(ComposeColor(color))
+                }
+            }
+            .border(1.dp, MiuixTheme.colorScheme.outline, ContinuousRoundedRectangle(10.dp))
+    )
 }
 
 @Composable
@@ -1988,42 +2033,28 @@ private fun MiuixSwitchWidget(
 private fun previewTextColor(color: Int): ComposeColor =
     if (isLightColor(color)) ComposeColor.Black else ComposeColor.White
 
-private fun formatRgb(color: Int): String = String.format("#%06X", color and 0xFFFFFF)
-
 private fun formatArgb(color: Int): String = String.format("#%08X", color)
 
 private fun sanitizeHexColorInput(input: String): String? {
     val trimmed = input.trim()
-    val hasPrefix = trimmed.startsWith("#")
     val body = trimmed.removePrefix("#")
     if (body.length > 8 || !body.matches(Regex("^[0-9a-fA-F]*$"))) {
         return null
     }
-    return if (hasPrefix || body.isNotEmpty()) "#$body" else ""
+    return trimmed
 }
 
-private fun sanitizeRgbColorInput(input: String): String? {
-    val trimmed = input.trim()
-    val hasPrefix = trimmed.startsWith("#")
-    val body = trimmed.removePrefix("#")
-    if (body.length > 6 || !body.matches(Regex("^[0-9a-fA-F]*$"))) {
-        return null
-    }
-    return if (hasPrefix || body.isNotEmpty()) "#$body" else ""
-}
-
-private fun parseHexColor(input: String): Int? {
+private fun parseEditorColor(input: String, currentColor: Int): Int? {
     val body = input.trim().removePrefix("#")
-    return when (body.length) {
+    val parsed = when (body.length) {
         6, 8 -> runCatching { Color.parseColor("#$body") }.getOrNull()
         else -> null
+    } ?: return null
+    return if (body.length == 6) {
+        (currentColor and 0xFF000000.toInt()) or (parsed and 0xFFFFFF)
+    } else {
+        parsed
     }
-}
-
-private fun parseRgbColor(input: String): Int? {
-    val body = input.trim().removePrefix("#")
-    if (body.length != 6) return null
-    return runCatching { Color.parseColor("#$body") }.getOrNull()
 }
 
 private fun sanitizeIntegerInput(input: String, maxLength: Int): String? {

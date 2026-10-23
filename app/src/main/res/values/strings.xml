@@ -15,7 +15,7 @@
     <string name="settings_save">Save changes</string>
     <string name="settings_reset">Restore defaults</string>
     <string name="settings_restart">Restart WeType</string>
-    <string name="settings_saved">Settings saved</string>
+    <string name="settings_saved">Light and dark settings saved</string>
     <string name="settings_save_failed">Could not save settings</string>
     <string name="settings_invalid_color">Invalid color format. Please use #RRGGBB.</string>
     <string name="settings_root_required">Root permission is required</string>
@@ -47,7 +47,7 @@
     <string name="settings_edge_highlight_intensity_title">Highlight intensity</string>
     <string name="settings_group_color">Color</string>
     <string name="settings_group_actions">Actions</string>
-    <string name="settings_group_other">Other</string>
+    <string name="settings_group_other">Shared settings</string>
 
     <string name="settings_disable_hot_update_title">Disable hot update</string>
     <string name="settings_disable_hot_update_desc">Block WeType hotfix updates</string>
@@ -55,7 +55,6 @@
     <string name="settings_hide_launcher_icon_desc">Applies immediately. Open settings from LSPosed or enter *#*#%1$s#*#* in the dialer. On MIUI/HyperOS, allow this module to open windows in the background to use the dialer shortcut.</string>
     <string name="settings_launcher_icon_failed">Could not access the launcher icon setting. Please reopen this page and try again.</string>
 
-    <string name="settings_preview_title">Effect preview</string>
     <string name="settings_preview_mode_light">Light mode</string>
     <string name="settings_preview_mode_dark">Dark mode</string>
     <string name="settings_blur_title">Blur strength</string>
@@ -89,9 +88,9 @@
     <string name="settings_candidate_pinyin_margin_desc">Edit the left padding of the pinyin area.</string>
 
     <string name="settings_save_title">Save settings</string>
-    <string name="settings_save_desc">Write the current configuration to the module</string>
-    <string name="settings_reset_title">Restore defaults</string>
-    <string name="settings_reset_desc">Reset all options to their default values</string>
+    <string name="settings_save_desc">Save the light and dark appearance settings together</string>
+    <string name="settings_reset_title">Reset current appearance</string>
+    <string name="settings_reset_desc">Restore this mode to its defaults. Tap Save to apply.</string>
     <string name="settings_restart_title">Restart WeType</string>
     <string name="settings_restart_desc">Restart the input method to apply changes</string>
     <string name="settings_visit_github_title">Visit GitHub</string>
@@ -101,7 +100,7 @@
     <string name="settings_color_dialog_title">Choose color</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_confirm">Confirm</string>
-    <string name="settings_reset_toast">Defaults restored</string>
+    <string name="settings_reset_toast">Current appearance reset. Tap Save to apply.</string>
     <string name="activation_required_title">Module is not active / scope not restarted</string>
     <string name="activation_required_summary">Make sure this module is enabled in LSPosed, restart the scope, and confirm you can already see the WeType visual effect. Then reopen this launcher entry to enter the embedded WeType settings page.</string>
     <string name="activation_detecting_summary">Waiting for a fresh WeType activation signal.</string>
@@ -148,4 +147,13 @@
     <string name="settings_glass_lighten_angle">Brightening angle</string>
     <string name="settings_glass_highlight_parameter">Highlight · %1$s</string>
     <string name="settings_glass_reset_desc">Restore the default glass, frost, and highlight parameters.</string>
+    <string name="settings_profile_invalid">%1$s: %2$s</string>
+    <string name="settings_invalid_margin">Candidate margins must be whole numbers from 0 to 64.</string>
+    <string name="settings_color_hex_label">Hex color</string>
+    <string name="settings_color_hex_helper">#RRGGBB keeps the current opacity; #AARRGGBB also sets opacity.</string>
+    <string name="settings_color_hex_invalid">Enter a complete #RRGGBB or #AARRGGBB color.</string>
+    <string name="settings_color_follow_light">Follow light mode</string>
+    <string name="settings_color_follow_dark">Follow dark mode</string>
+    <string name="settings_color_follow_description">Keep this color and opacity in sync with the other mode.</string>
+    <string name="settings_color_follow_summary">%1$s · %2$s</string>
 </resources>

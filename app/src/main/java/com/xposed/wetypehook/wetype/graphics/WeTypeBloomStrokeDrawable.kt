@@ -57,7 +57,9 @@ internal class WeTypeBloomStrokeDrawable(
     private val context: Context,
     private val cornerRadii: WeTypeCornerRadii,
     private var surfaceColor: Int,
-    private var intensityScale: Float = 1f
+    private var intensityScale: Float = 1f,
+    private val darkMode: Boolean = context.resources.configuration.uiMode and
+        Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
 ) : Drawable() {
     private val contentPath = Path()
     private val renderedShadows = mutableListOf<RenderedShadow>()
@@ -121,7 +123,7 @@ internal class WeTypeBloomStrokeDrawable(
 
     private fun shadowAlphaScale(): Float = surfaceAlphaScale(surfaceColor) *
         (drawableAlpha / 255f) * intensityScale.coerceAtLeast(0f) *
-        if (isDarkMode()) DARK_MODE_ALPHA_SCALE else 1f
+        if (darkMode) DARK_MODE_ALPHA_SCALE else 1f
 
     private fun updateShadowColors() {
         val scale = shadowAlphaScale()
@@ -258,10 +260,6 @@ internal class WeTypeBloomStrokeDrawable(
 
     private fun dp(value: Float): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics)
-
-    private fun isDarkMode(): Boolean =
-        context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-            Configuration.UI_MODE_NIGHT_YES
 
     private fun surfaceAlphaScale(color: Int): Float {
         val alpha = Color.alpha(color) / 255f

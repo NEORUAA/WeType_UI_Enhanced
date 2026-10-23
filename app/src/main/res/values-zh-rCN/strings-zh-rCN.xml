@@ -15,7 +15,7 @@
     <string name="settings_save">保存更改</string>
     <string name="settings_reset">恢复默认</string>
     <string name="settings_restart">重启 WeType</string>
-    <string name="settings_saved">设置已保存, 重启输入法进程以生效</string>
+    <string name="settings_saved">浅色与深色设置已保存</string>
     <string name="settings_save_failed">设置保存失败</string>
     <string name="settings_invalid_color">颜色格式不正确，请使用 #RRGGBB。</string>
     <string name="settings_root_required">请先授予 root 权限</string>
@@ -47,7 +47,7 @@
     <string name="settings_edge_highlight_intensity_title">高光效果强度</string>
     <string name="settings_group_color">颜色</string>
     <string name="settings_group_actions">操作</string>
-    <string name="settings_group_other">其他</string>
+    <string name="settings_group_other">通用设置</string>
 
     <string name="settings_disable_hot_update_title">禁用热更新</string>
     <string name="settings_disable_hot_update_desc">阻止微信输入法热修复</string>
@@ -55,7 +55,6 @@
     <string name="settings_hide_launcher_icon_desc">立即生效。隐藏后可从 LSPosed 打开设置，或在拨号盘输入 *#*#%1$s#*#*。MIUI/HyperOS 使用拨号入口需允许本模块在后台弹出界面。</string>
     <string name="settings_launcher_icon_failed">无法读取或更改桌面图标状态，请重新打开此页面后重试。</string>
 
-    <string name="settings_preview_title">效果预览</string>
     <string name="settings_preview_mode_light">浅色模式</string>
     <string name="settings_preview_mode_dark">深色模式</string>
     <string name="settings_blur_title">模糊强度</string>
@@ -89,9 +88,9 @@
     <string name="settings_candidate_pinyin_margin_desc">编辑候选栏内显拼音的左边距</string>
 
     <string name="settings_save_title">保存设置</string>
-    <string name="settings_save_desc">将当前配置写入模块</string>
-    <string name="settings_reset_title">恢复默认</string>
-    <string name="settings_reset_desc">重置所有选项为默认值</string>
+    <string name="settings_save_desc">同时保存浅色与深色模式的外观设置</string>
+    <string name="settings_reset_title">重置当前模式外观</string>
+    <string name="settings_reset_desc">恢复当前模式的默认外观，点击保存后生效</string>
     <string name="settings_restart_title">重启 WeType</string>
     <string name="settings_restart_desc">重启输入法以应用更改</string>
     <string name="settings_visit_github_title">前往 GitHub</string>
@@ -101,7 +100,7 @@
     <string name="settings_color_dialog_title">选择颜色</string>
     <string name="settings_cancel">取消</string>
     <string name="settings_confirm">确定</string>
-    <string name="settings_reset_toast">已恢复默认, 重启输入法进程以生效</string>
+    <string name="settings_reset_toast">当前模式外观已重置，点击保存后生效</string>
     <string name="activation_required_title">模块未启用/作用域未重启</string>
     <string name="activation_required_summary">请保证已在 LSPosed 中启用该模块，重启作用域，已在 WeType 中看到美化效果。然后重新打开此桌面入口，即可进入寄生的 WeType 设置页。</string>
     <string name="activation_detecting_summary">正在等待 WeType 启动以验证启用状态。</string>
@@ -148,4 +147,13 @@
     <string name="settings_glass_lighten_angle">提亮角域</string>
     <string name="settings_glass_highlight_parameter">高光 · %1$s</string>
     <string name="settings_glass_reset_desc">恢复默认的玻璃、磨砂和高光参数。</string>
+    <string name="settings_profile_invalid">%1$s：%2$s</string>
+    <string name="settings_invalid_margin">候选栏边距需填写 0 到 64 的整数。</string>
+    <string name="settings_color_hex_label">十六进制颜色</string>
+    <string name="settings_color_hex_helper">#RRGGBB 保留当前透明度，#AARRGGBB 可同时设置透明度。</string>
+    <string name="settings_color_hex_invalid">请输入完整的 #RRGGBB 或 #AARRGGBB 颜色。</string>
+    <string name="settings_color_follow_light">跟随浅色模式</string>
+    <string name="settings_color_follow_dark">跟随深色模式</string>
+    <string name="settings_color_follow_description">颜色和透明度随另一模式同步变化</string>
+    <string name="settings_color_follow_summary">%1$s · %2$s</string>
 </resources>

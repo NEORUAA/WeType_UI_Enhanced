@@ -627,7 +627,7 @@ internal object WeTypeWindowHooks {
     ) {
         val decorGroup = decorView as? ViewGroup ?: return
         val backgroundHeight = bounds.height
-        val settings = WeTypeSettings.readSnapshotXposed()
+        val settings = WeTypeSettings.readSnapshotXposed(context.resources)
         val cornerRadii = resolveCornerRadii(decorView, context, state, settings.cornerRadius)
         if (backgroundHeight < cornerRadii.maxRadius()) {
             hideBackgroundCarrier(state)
@@ -682,20 +682,21 @@ internal object WeTypeWindowHooks {
         left: Int = 0,
         width: Int = parent.width
     ) {
-        val settings = WeTypeSettings.readSnapshotXposed()
+        val settings = WeTypeSettings.readSnapshotXposed(context.resources)
         val overrides = if (settings.hyperMaterialEnabled && WeTypeHyperMaterial.areGlassOverridesAvailable()) {
             settings.glassOverrides
         } else GlassMaterialOverrides()
         val carrier = ensureBackgroundCarrier(context, parent, state, overrides)
         carrier.visibility = View.VISIBLE
         val style = BackgroundStyle(
-            color = if (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-                Configuration.UI_MODE_NIGHT_YES) settings.darkColor else settings.lightColor,
+            color = settings.backgroundColor,
             blurRadius = settings.blurRadius,
             edgeHighlightEnabled = settings.edgeHighlightEnabled,
             edgeHighlightIntensity = settings.edgeHighlightIntensity,
             cornerRadii = cornerRadii,
-            nightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
+            nightMode = if (WeTypeSettings.isHostDarkMode(context.resources)) {
+                Configuration.UI_MODE_NIGHT_YES
+            } else Configuration.UI_MODE_NIGHT_NO,
             density = context.resources.displayMetrics.density,
             hyperMaterialEnabled = settings.hyperMaterialEnabled,
             hyperMaterialAvailable = if (state.backgroundStyleDirty || state.backgroundStyle == null) {
@@ -903,7 +904,8 @@ internal object WeTypeWindowHooks {
                         context = context,
                         cornerRadii = cornerRadii,
                         surfaceColor = color,
-                        intensityScale = edgeHighlightIntensity / 100f
+                        intensityScale = edgeHighlightIntensity / 100f,
+                        darkMode = style.nightMode == Configuration.UI_MODE_NIGHT_YES
                     )
                 )
             }

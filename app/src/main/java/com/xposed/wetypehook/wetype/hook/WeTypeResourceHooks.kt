@@ -36,7 +36,6 @@ import kotlin.math.roundToInt
 
 internal object WeTypeResourceHooks {
     private const val WETYPE_RESOURCE_PACKAGE = "com.tencent.wetype"
-    private const val WETYPE_DRAWABLE_R_CLASS = "com.tencent.wetype.plugin.hld.r"
     private const val WETYPE_ATTR_R_CLASS = "com.tencent.wetype.plugin.hld.o"
     private const val WETYPE_ID_R_CLASS = "com.tencent.wetype.plugin.hld.s"
     private const val KEY_DATA_CLASS =
@@ -47,10 +46,6 @@ internal object WeTypeResourceHooks {
     // Faint hairline alpha applied to the host key border color (mirrors the legacy flat look).
     private const val KEY_BORDER_ALPHA = 0x20
 
-    // Background opacity fraction applied to the synthesized logo drawable. Dark logo variants use a
-    // much lighter background so the white backing circle stays subtle against dark keyboards.
-    private const val LOGO_LIGHT_BG_ALPHA_FRACTION = 0.9f
-    private const val LOGO_DARK_BG_ALPHA_FRACTION = 0.2f
     private const val LOGO_RESOURCE_TAG_KEY = 0x4D49554C
     private const val CANDIDATE_SELF_VIEW_PACKAGE =
         "com.tencent.wetype.plugin.hld.candidate.selfdraw.selfview."
@@ -106,11 +101,13 @@ internal object WeTypeResourceHooks {
         override fun initialValue(): FloatArray = FloatArray(3)
     }
 
-    @Volatile
-    private var cachedAppearanceColors: Map<String, Int>? = null
+    private data class AppearanceColorCache(
+        val colors: Map<String, Int>,
+        val params: Map<String, AppearanceColorParams>
+    )
 
     @Volatile
-    private var cachedAppearanceColorParams: Map<String, AppearanceColorParams> = emptyMap()
+    private var appearanceColorCache: AppearanceColorCache? = null
 
     private data class AppearanceColorParams(
         val mode: WeTypeAppearanceColorMode,
@@ -442,8 +439,8 @@ internal object WeTypeResourceHooks {
      * special/function keys (backspace, "123", symbols, caps lock, ...). Accent keys (the green
      * "搜索"/enter button, `ime_color_btn_green_*`) and every non-key surface are intentionally left
      * untouched. The light/dark variants share the same attribute id and are disambiguated at
-     * resolve time from the theme's night-mode configuration, matching the background color's
-     * light/dark handling. Matching on the attribute id (rather than the resolved resource id) is
+     * resolve time from the host's active skin, matching the background profile even when the
+     * keyboard uses a different mode from Android. Matching on the attribute id is
      * what makes this robust: the skin frequently resolves these attributes to inline colors whose
      * `TypedValue.resourceId` is 0.
      */
@@ -536,11 +533,10 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    private fun resolveKeyColor(theme: Resources.Theme): Int {        val isDarkMode = theme.resources.configuration.uiMode and
-            android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
-            android.content.res.Configuration.UI_MODE_NIGHT_YES
+    private fun resolveKeyColor(theme: Resources.Theme): Int {
+        val isDarkMode = WeTypeSettings.isHostDarkMode(theme.resources)
         val groupId = if (isDarkMode) DARK_KEY_COLOR_GROUP_ID else LIGHT_KEY_COLOR_GROUP_ID
-        return WeTypeSettings.getAppearanceColorXposed(groupId)
+        return WeTypeSettings.getAppearanceColorXposed(groupId, theme.resources)
     }
 
     private fun applyColorToTypedValue(outValue: TypedValue, color: Int) {
@@ -733,14 +729,6 @@ internal object WeTypeResourceHooks {
             val sClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s") ?: return
             val logoIvId = sClass.getField("logo_iv").getInt(null)
 
-            // Resolve the resource IDs of the "dark" logo variants up-front from the host's R
-            // drawable class. The R field names (e.g. ime_logo_green_dark) are stable source
-            // identifiers that survive across host versions, whereas the obfuscated resource
-            // *entry* names returned by getResourceEntryName (e.g. "j3" in 3.3.0, "j1" in 3.4.0)
-            // change between releases. Matching on those entry-name strings is what previously
-            // broke the dark-logo detection on 3.4.0 and left the background fully opaque.
-            val darkLogoResIds = resolveDarkLogoResIds()
-
             ImageView::class.java.getMethod(
                 "setImageResource",
                 Int::class.javaPrimitiveType
@@ -753,12 +741,7 @@ internal object WeTypeResourceHooks {
                     replacedLogoStates[imageView] = LogoHostState(resourceId = resId)
                 }
                 imageView.setTag(LOGO_RESOURCE_TAG_KEY, resId)
-                val alpha = if (isDarkLogoResource(resId, darkLogoResIds, imageView.resources)) {
-                    LOGO_DARK_BG_ALPHA_FRACTION
-                } else {
-                    LOGO_LIGHT_BG_ALPHA_FRACTION
-                }
-                imageView.setImageDrawable(WeTypeIconDrawable(alpha))
+                imageView.setImageDrawable(WeTypeIconDrawable())
                 param.result = null
             }
             ImageView::class.java.getMethod(
@@ -774,13 +757,7 @@ internal object WeTypeResourceHooks {
                     replacedLogoStates[imageView] = LogoHostState(drawable = drawableArg as? Drawable)
                 }
                 imageView.setTag(LOGO_RESOURCE_TAG_KEY, null)
-                var alpha = LOGO_LIGHT_BG_ALPHA_FRACTION
-                val uiMode = imageView.resources.configuration.uiMode and
-                    android.content.res.Configuration.UI_MODE_NIGHT_MASK
-                if (uiMode == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
-                    alpha = LOGO_DARK_BG_ALPHA_FRACTION
-                }
-                param[0] = WeTypeIconDrawable(alpha)
+                param[0] = WeTypeIconDrawable()
             }
             Log.i("Success: Hook WeType keyboard logo")
         }.onFailure {
@@ -798,7 +775,6 @@ internal object WeTypeResourceHooks {
                 ?.getField(CANDIDATE_PINYIN_CONTAINER_ID_NAME)
                 ?.getInt(null)
         }.getOrNull()
-        val darkLogoResIds = resolveDarkLogoResIds()
         rootViews.forEach { rootView ->
             forEachView(rootView) { view ->
                 if (view.id == candidatePinyinContainerId) {
@@ -817,19 +793,7 @@ internal object WeTypeResourceHooks {
                         LogoHostState(drawable = imageView.drawable)
                     }
                 }
-                val isDark = resourceId?.let { resId ->
-                    isDarkLogoResource(resId, darkLogoResIds, imageView.resources)
-                } ?: (
-                    imageView.resources.configuration.uiMode and
-                        android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
-                        android.content.res.Configuration.UI_MODE_NIGHT_YES
-                    )
-                imageView.setImageDrawable(
-                    WeTypeIconDrawable(
-                        if (isDark) LOGO_DARK_BG_ALPHA_FRACTION
-                        else LOGO_LIGHT_BG_ALPHA_FRACTION
-                    )
-                )
+                imageView.setImageDrawable(WeTypeIconDrawable())
             }
         }
     }
@@ -844,46 +808,6 @@ internal object WeTypeResourceHooks {
                 for (index in 0 until view.childCount) pending.addLast(view.getChildAt(index))
             }
         }
-    }
-
-    /**
-     * Resolves the resource IDs of every "dark" keyboard-logo drawable from the host's R drawable
-     * class by their stable source field names (e.g. ime_logo_green_dark, icon_logo_grey_dark).
-     *
-     * This is deliberately version-agnostic: it enumerates the R fields whose names identify a dark
-     * logo variant rather than relying on the obfuscated resource entry names, which differ between
-     * host releases (e.g. "j3" on 3.3.0 vs "j1" on 3.4.0). Returns an empty set if the class or
-     * fields cannot be resolved, in which case the caller falls back to name/uiMode heuristics.
-     */
-    private fun resolveDarkLogoResIds(): Set<Int> {
-        val rClass = loadClassOrNull(WETYPE_DRAWABLE_R_CLASS) ?: return emptySet()
-        return rClass.declaredFields.asSequence()
-            .filter { field ->
-                val name = field.name.lowercase()
-                java.lang.reflect.Modifier.isStatic(field.modifiers) &&
-                    field.type == Int::class.javaPrimitiveType &&
-                    name.contains("logo") &&
-                    name.endsWith("_dark")
-            }
-            .mapNotNull { field ->
-                runCatching {
-                    field.isAccessible = true
-                    field.getInt(null)
-                }.getOrNull()
-            }
-            .toSet()
-    }
-
-    private fun isDarkLogoResource(
-        resId: Int,
-        darkLogoResIds: Set<Int>,
-        resources: Resources
-    ): Boolean {
-        if (resId in darkLogoResIds) return true
-        // Fallback for host builds that keep readable resource entry names (the dark variants then
-        // literally contain "dark", e.g. icon_logo_grey_dark).
-        val resName = runCatching { resources.getResourceEntryName(resId) }.getOrNull().orEmpty()
-        return resName.contains("dark", ignoreCase = true)
     }
 
     fun hookToolbarIconBackground() {
@@ -1128,8 +1052,7 @@ internal object WeTypeResourceHooks {
             candidateItemRootAppliedLeftPaddingPx.clear()
         }
         synchronized(appearanceColorParamsLock) {
-            cachedAppearanceColors = null
-            cachedAppearanceColorParams = emptyMap()
+            appearanceColorCache = null
         }
         candidateMarginInsetWriteDepth.remove()
         hsvScratchThreadLocal.remove()
@@ -1361,23 +1284,24 @@ internal object WeTypeResourceHooks {
 
     private fun appearanceColorParams(group: WeTypeAppearanceColorGroup): AppearanceColorParams {
         val appearanceColors = WeTypeSettings.getAppearanceColorsXposed()
-        val cachedColors = cachedAppearanceColors
-        if (appearanceColors === cachedColors) {
-            cachedAppearanceColorParams[group.id]?.let { return it }
+        val cached = appearanceColorCache
+        if (appearanceColors === cached?.colors) {
+            cached.params[group.id]?.let { return it }
         }
 
         synchronized(appearanceColorParamsLock) {
-            if (appearanceColors !== cachedAppearanceColors) {
-                cachedAppearanceColorParams = buildAppearanceColorParams(appearanceColors)
-                cachedAppearanceColors = appearanceColors
+            var cache = appearanceColorCache
+            if (appearanceColors !== cache?.colors) {
+                cache = AppearanceColorCache(appearanceColors, buildAppearanceColorParams(appearanceColors))
+                appearanceColorCache = cache
             }
-            cachedAppearanceColorParams[group.id]?.let { return it }
+            checkNotNull(cache).params[group.id]?.let { return it }
 
             val params = buildAppearanceColorParam(
                 group = group,
                 userColor = appearanceColors[group.id] ?: group.defaultColor
             )
-            cachedAppearanceColorParams = cachedAppearanceColorParams + (group.id to params)
+            appearanceColorCache = cache.copy(params = cache.params + (group.id to params))
             return params
         }
     }

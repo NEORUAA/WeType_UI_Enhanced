@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.AssetManager
-import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Rect
@@ -24,6 +23,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import com.xposed.wetypehook.wetype.hook.WeTypeResourceHooks
+import com.xposed.wetypehook.wetype.hook.WeTypeThemeMode
 import com.xposed.wetypehook.wetype.hook.WeTypeUpdateHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeWindowHooks
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
@@ -196,11 +196,11 @@ class MainHook : XposedModule() {
             WeTypeResourceHooks.prepareForHotReload()
         }
         val mainClean = cleanupExternalState()
-        WeTypeSettings.prepareForHotReload()
         if (!hostClean || !windowClean || !resourcesClean || !mainClean) {
             Log.e("Reject hot reload because target-process callbacks could not be fully cleaned")
             return false
         }
+        WeTypeSettings.prepareForHotReload()
         Log.i("Old generation is ready for hot reload")
         return true
     }
@@ -299,6 +299,7 @@ class MainHook : XposedModule() {
             // supplied by onPackageReady still resolves the original APK's duplicate classes.
             HookEnvironment.updateClassLoader(context.classLoader)
             WeTypeSettings.ensureHostSnapshot(context)
+            WeTypeThemeMode.install(context.classLoader, context.applicationInfo.sourceDir)
             installWeTypeHooks(sourcePackage)
             Log.i("Success: Hook WeType with attached application class loader")
         }
@@ -1082,6 +1083,13 @@ class MainHook : XposedModule() {
                 if (param.argumentCount > 1 && param[1] is Int) {
                     param[1] = Color.TRANSPARENT
                 }
+                val contentColor = resolveTransparentBottomViewContentColor()
+                if (param.argumentCount > 2 && param[2] is Int) {
+                    param[2] = contentColor
+                }
+                if (param.argumentCount > 3 && param[3] is Int) {
+                    param[3] = withAlpha(contentColor, 0x66)
+                }
             }
 
             clazz.findMethod { name == "addMiuiBottomView" }.hookAfter {
@@ -1120,9 +1128,7 @@ class MainHook : XposedModule() {
     }
 
     private fun resolveTransparentBottomViewContentColor(): Int {
-        val isDarkMode =
-            Resources.getSystem().configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-                Configuration.UI_MODE_NIGHT_YES
+        val isDarkMode = WeTypeSettings.isHostDarkMode(Resources.getSystem())
         return if (isDarkMode) TRANSPARENT_BOTTOM_VIEW_DARK_CONTENT else TRANSPARENT_BOTTOM_VIEW_LIGHT_CONTENT
     }
 
