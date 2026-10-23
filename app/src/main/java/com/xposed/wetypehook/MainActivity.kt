@@ -89,7 +89,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -101,6 +100,7 @@ import androidx.core.view.WindowCompat
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.xposed.wetypehook.ui.TabRowWithContour
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
+import com.xposed.wetypehook.wetype.graphics.SfSymbols
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
 import com.xposed.wetypehook.wetype.graphics.WeTypeCornerRadii
@@ -1179,13 +1179,14 @@ private fun PreviewCard(
 ) {
     val context = LocalContext.current
     val displayColor = if (hyperMaterialEnabled && glassOverrides.glass == null) WeTypeHyperMaterial.fallbackColor(isDark) else color
-    val weTypeFontFamily = remember(context) {
-        FontFamily(
-            Font(
-                path = "WE-Regular.ttf",
-                assetManager = context.assets
-            )
-        )
+    val keyboardFontFamily = remember(context) {
+        val hostAssets = runCatching {
+            val application = context.applicationContext
+            if (application.packageName == "com.tencent.wetype") application.assets
+            else context.createPackageContext("com.tencent.wetype", 0).assets
+        }.getOrNull()
+        SfSymbols.getTypeface(context.assets, hostAssets = hostAssets)
+            ?.let { FontFamily(it) } ?: FontFamily.Default
     }
     val previewCornerValue = cornerRadius.coerceIn(0, WeTypeSettings.MAX_CORNER_RADIUS)
     val previewCorner = previewCornerValue.dp
@@ -1281,7 +1282,7 @@ private fun PreviewCard(
                                     style = MiuixTheme.textStyles.headline1,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    fontFamily = weTypeFontFamily
+                                    fontFamily = keyboardFontFamily
                                 )
                             }
 
@@ -1297,7 +1298,7 @@ private fun PreviewCard(
                                         text = i.toString(),
                                         color = previewTextColor(displayColor),
                                         style = MiuixTheme.textStyles.headline1,
-                                        fontFamily = weTypeFontFamily
+                                        fontFamily = keyboardFontFamily
                                     )
                                 }
                             }

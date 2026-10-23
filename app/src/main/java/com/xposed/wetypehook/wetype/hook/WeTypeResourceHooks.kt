@@ -22,6 +22,7 @@ import com.xposed.wetypehook.xposed.hookAfter
 import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.hookReturnConstant
 import com.xposed.wetypehook.xposed.loadClassOrNull
+import com.xposed.wetypehook.wetype.graphics.SfSymbols
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroup
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorMode
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroups
@@ -117,7 +118,6 @@ internal object WeTypeResourceHooks {
 
     fun hookFont(
         fontAsset: String,
-        moduleFontAsset: String,
         getModuleAssetManager: () -> AssetManager
     ) {
         runCatching {
@@ -127,9 +127,12 @@ internal object WeTypeResourceHooks {
                 String::class.java
             ).hookBefore { param ->
                 if (param[1] != fontAsset) return@hookBefore
-                param.result = Typeface.createFromAsset(getModuleAssetManager(), moduleFontAsset)
+                val hostAssets = param[0] as? AssetManager ?: return@hookBefore
+                runCatching {
+                    SfSymbols.getTypeface(getModuleAssetManager(), hostAssets = hostAssets)
+                }.getOrNull()?.let { param.result = it }
             }
-            Log.i("Success: Hook WeType font replacement")
+            Log.i("Success: Hook SF Pro with host WeType font fallback")
         }.onFailure {
             Log.i("Failed: Hook WeType font replacement")
             Log.i(it)

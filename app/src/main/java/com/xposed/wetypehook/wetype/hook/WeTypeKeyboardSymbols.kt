@@ -123,16 +123,19 @@ internal object WeTypeKeyboardSymbols {
                 HookEnvironment.registerHook(content, "content") { chain ->
                     val button = chain.args.getOrNull(1) ?: return@registerHook chain.proceed()
                     val canvas = chain.args.getOrNull(0) as? Canvas ?: return@registerHook chain.proceed()
-                    val selection = runCatching { access.appearance(button) }.getOrNull()
+                    val hostResources = runCatching { access.resources(button) }.getOrNull()
+                        ?: return@registerHook chain.proceed()
+                    val selection = runCatching { access.appearance(button, hostResources) }.getOrNull()
                         ?: return@registerHook chain.proceed()
                     if (selection == WeTypeKeyAppearance.Empty) return@registerHook null
                     val assets = runCatching(getModuleAssets).getOrNull()
                         ?: return@registerHook chain.proceed()
                     if (selection == WeTypeKeyAppearance.FontOnly) {
-                        if (runCatching { access.drawDotComma(canvas, assets, button) }.getOrDefault(false)) {
+                        if (runCatching { access.drawDotComma(canvas, assets, button, hostResources.assets) }.getOrDefault(false)) {
                             return@registerHook null
                         }
-                        val font = SfSymbols.getTypeface(assets) ?: return@registerHook chain.proceed()
+                        val font = SfSymbols.getTypeface(assets, hostAssets = hostResources.assets)
+                            ?: return@registerHook chain.proceed()
                         val previous = paintFields.mapNotNull { field ->
                             (field.get(chain.thisObject) as? Paint)?.let { paint ->
                                 TextPaintState(paint).also {
@@ -151,7 +154,9 @@ internal object WeTypeKeyboardSymbols {
                             else activeFontDrawer.set(previousDrawer)
                         }
                     } else {
-                        val rendered = runCatching { access.draw(canvas, assets, button, selection) }.getOrDefault(false)
+                        val rendered = runCatching {
+                            access.draw(canvas, assets, button, selection, hostResources.assets)
+                        }.getOrDefault(false)
                         if (rendered) null else chain.proceed()
                     }
                 }
@@ -222,13 +227,14 @@ internal object WeTypeKeyboardSymbols {
             return PropertyReader(null, field.apply { isAccessible = true })
         }
 
-        fun appearance(button: Any): WeTypeKeyAppearance? {
+        fun resources(button: Any): Resources? = (parent.invoke(button) as? View)?.resources
+
+        fun appearance(button: Any, resources: Resources): WeTypeKeyAppearance? {
             if (visible.invoke(button) != true) return null
-            val view = parent.invoke(button) as? View ?: return null
             val resourceId = image.invoke(button) as Int
             val imageName = synchronized(resourceNames) {
-                resourceNames.getOrPut(view.resources) { mutableMapOf() }.getOrPut(resourceId) {
-                    if (resourceId == 0) "" else runCatching { view.resources.getResourceEntryName(resourceId) }.getOrDefault("")
+                resourceNames.getOrPut(resources) { mutableMapOf() }.getOrPut(resourceId) {
+                    if (resourceId == 0) "" else runCatching { resources.getResourceEntryName(resourceId) }.getOrDefault("")
                 }
             }
             val appearance = resolveWeTypeKeyAppearance(
@@ -243,7 +249,7 @@ internal object WeTypeKeyboardSymbols {
         }
 
         @Synchronized
-        fun drawDotComma(canvas: Canvas, assets: AssetManager, button: Any): Boolean {
+        fun drawDotComma(canvas: Canvas, assets: AssetManager, button: Any, hostAssets: AssetManager): Boolean {
             if (drawerType.invoke(button) != "dotComma") return false
             val main = mainText.invoke(button) as String
             val hint = floatText.invoke(button) as String
@@ -253,7 +259,7 @@ internal object WeTypeKeyboardSymbols {
             val hintSize = (floatTextSize.invoke(button) as Int).toFloat()
             if (rect.isEmpty || mainSize <= 0f || hintSize <= 0f) return false
             val paint = dotCommaPaint
-            paint.typeface = SfSymbols.getTypeface(assets) ?: return false
+            paint.typeface = SfSymbols.getTypeface(assets, hostAssets = hostAssets) ?: return false
             paint.textSize = mainSize
             paint.getTextBounds(main, 0, main.length, mainInk)
             val mainMetrics = paint.fontMetrics
@@ -278,7 +284,7 @@ internal object WeTypeKeyboardSymbols {
             return true
         }
 
-        fun draw(canvas: Canvas, assets: AssetManager, button: Any, appearance: WeTypeKeyAppearance): Boolean {
+        fun draw(canvas: Canvas, assets: AssetManager, button: Any, appearance: WeTypeKeyAppearance, hostAssets: AssetManager): Boolean {
             val rect = drawRect.invoke(button) as Rect
             if (rect.isEmpty) return false
             val isImage = drawerType.invoke(button) == "imageType"
@@ -307,11 +313,11 @@ internal object WeTypeKeyboardSymbols {
                     }
                     val size = symbolReferenceHeight(button, appearance.name, rect.height()) * referenceSize / 43f * 0.85f
                     SfSymbols.drawSymbol(canvas, assets, appearance.name, bounds,
-                        size, color, weight = 400, fitFraction = 1f)
+                        size, color, weight = 400, fitFraction = 1f, hostAssets = hostAssets)
                 }
                 is WeTypeKeyAppearance.Text -> {
                     val size = rect.height() * 18f / 43f
-                    SfSymbols.drawText(canvas, assets, appearance.value, bounds, size, color)
+                    SfSymbols.drawText(canvas, assets, appearance.value, bounds, size, color, hostAssets = hostAssets)
                 }
                 WeTypeKeyAppearance.Empty -> true
                 WeTypeKeyAppearance.FontOnly -> false

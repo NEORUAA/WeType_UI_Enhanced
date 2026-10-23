@@ -68,7 +68,6 @@ private const val INPUT_METHOD_BOTTOM_MANAGER = "com.miui.inputmethod.InputMetho
 private const val WETYPE_ABOUT_ACTIVITY = "com.tencent.wetype.plugin.hld.ui.ImeAboutActivity"
 private const val WETYPE_ABOUT_LOGO_TAG_KEY = 0x4D495549
 private const val WETYPE_FONT_ASSET = "fonts/WE-Regular.ttf"
-private const val MODULE_WETYPE_FONT_ASSET = "WE-Regular.ttf"
 private const val TRANSPARENT_BOTTOM_VIEW_DARK_CONTENT = 0xFFF5F5F5.toInt()
 private const val TRANSPARENT_BOTTOM_VIEW_LIGHT_CONTENT = 0xFF202020.toInt()
 private const val TARGET_KIND_SYSTEM = "system"
@@ -855,7 +854,6 @@ class MainHook : XposedModule() {
     private fun hookWeTypeFont() {
         WeTypeResourceHooks.hookFont(
             fontAsset = WETYPE_FONT_ASSET,
-            moduleFontAsset = MODULE_WETYPE_FONT_ASSET,
             getModuleAssetManager = ::getModuleAssetManager
         )
     }
