@@ -23,6 +23,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import com.xposed.wetypehook.wetype.hook.WeTypeResourceHooks
+import com.xposed.wetypehook.wetype.hook.WeTypeKeyboardSymbols
 import com.xposed.wetypehook.wetype.hook.WeTypeThemeMode
 import com.xposed.wetypehook.wetype.hook.WeTypeUpdateHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeWindowHooks
@@ -335,6 +336,9 @@ class MainHook : XposedModule() {
 
         HookEnvironment.withHookScope("wetype.activation") { hookActivationHeartbeat(sourcePackage) }
         HookEnvironment.withHookScope("wetype.font") { hookWeTypeFont() }
+        HookEnvironment.withHookScope("wetype.keyboard-symbols") {
+            WeTypeKeyboardSymbols.hook(::getModuleAssetManager)
+        }
         HookEnvironment.withHookScope("wetype.colors") { hookWeTypeTransparentColors() }
         HookEnvironment.withHookScope("wetype.overlay-underlay") { WeTypeWindowHooks.hookTransparentOverlayUnderlay() }
         HookEnvironment.withHookScope("wetype.self-draw-colors") { hookWeTypeSelfDrawKeyColors() }

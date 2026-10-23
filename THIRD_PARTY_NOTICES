@@ -1,0 +1,13 @@
+SF Pro private project resource
+-------------------------------
+The Apple SF Pro font at app/src/main/assets/fonts/sf_pro.ttf is copied
+unchanged from the personal Mei/MeiloX project. It provides SF Pro text and
+the SF Symbols glyphs used by the keyboard renderer.
+
+Source asset: Mei/app/src/main/res/font/sf_pro.ttf
+SHA-256: cdad8b33ab1ac3388a59e049399fef34eb1ec85863b009109760ed5e9ba0ea6f
+
+Apple retains all rights in this SF Pro font. It remains subject to
+Apple's terms and is not relicensed under this project's AGPL license.
+It must not be extracted or redistributed separately; public distribution of builds
+requires a fresh review of Apple's font license terms.

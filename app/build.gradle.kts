@@ -37,6 +37,10 @@ android {
             excludes += arrayOf("kotlin/**", "google/**", "**.bin")
         }
     }
+    androidResources {
+        // Let Android memory-map SF Pro instead of decompressing it for each axis variant.
+        noCompress += "sf_pro.ttf"
+    }
     applicationVariants.all {
         val outputFileName = "WeType_UI_Enhanced-${versionName}_${buildType.name}.apk"
         outputs.all {
