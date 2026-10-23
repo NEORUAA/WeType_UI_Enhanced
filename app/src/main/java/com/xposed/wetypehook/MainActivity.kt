@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -1195,7 +1197,12 @@ private fun PreviewCard(
         bottomStart = CornerSize(0.dp)
     )
     val previewKeyColor = if (isDark) darkKeyColor else lightKeyColor
-    val previewKeyShape = ContinuousRoundedRectangle(keyCornerRadius.dp)
+    val previewKeyWidth = 32.dp
+    val previewKeyHeight = previewKeyWidth * (130f / 92f)
+    // Scale the host's key geometry and corner radius together from its 92-unit key width.
+    val previewKeyShape = RoundedCornerShape(
+        previewKeyWidth * (WeTypeSettings.keyCornerRadiusToHostUnits(keyCornerRadius) / 92f)
+    )
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1255,18 +1262,25 @@ private fun PreviewCard(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
                                 modifier = Modifier
+                                    .weight(1f)
+                                    .height(previewKeyHeight)
                                     .clip(previewKeyShape)
                                     .background(ComposeColor(previewKeyColor))
-                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                                    .padding(horizontal = 14.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = if (hyperMaterialEnabled) stringResource(R.string.settings_hyper_material_preview) else formatArgb(color),
                                     color = previewTextColor(displayColor),
                                     style = MiuixTheme.textStyles.headline1,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     fontFamily = weTypeFontFamily
                                 )
                             }
@@ -1274,9 +1288,10 @@ private fun PreviewCard(
                             for (i in 'A'..'C') {
                                 Box(
                                     modifier = Modifier
+                                        .size(width = previewKeyWidth, height = previewKeyHeight)
                                         .clip(previewKeyShape)
-                                        .background(ComposeColor(previewKeyColor))
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                        .background(ComposeColor(previewKeyColor)),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = i.toString(),

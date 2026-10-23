@@ -41,9 +41,6 @@ internal object WeTypeResourceHooks {
     private const val WETYPE_ID_R_CLASS = "com.tencent.wetype.plugin.hld.s"
     private const val KEY_DATA_CLASS =
         "com.tencent.wetype.plugin.hld.keyboard.selfdraw.bean.KeyData"
-    // KeyData.bgCorner renders ~10dp smaller than its numeric value; offset the stored dp radius.
-    private const val KEY_CORNER_BGCORNER_OFFSET = 10
-
     // Faint hairline alpha applied to the host key border color (mirrors the legacy flat look).
     private const val KEY_BORDER_ALPHA = 0x20
 
@@ -522,10 +519,9 @@ internal object WeTypeResourceHooks {
             keyDataClass.getMethod("getBgCorner").hookAfter { param ->
                 // KeyData.getBgCorner() returns a nullable Float; force it to the configured value so
                 // every key (and the host's null-default fallback) uses the same corner radius. The
-                // stored value is the real radius in dp, while bgCorner renders ~10dp smaller than its
-                // value, so we add the offset to make the rendered corner match the dp the user set.
-                val cornerDp = WeTypeSettings.getKeyCornerRadiusXposed()
-                param.result = (cornerDp + KEY_CORNER_BGCORNER_OFFSET).toFloat()
+                // host then scales this design-unit radius together with the key dimensions.
+                val corner = WeTypeSettings.getKeyCornerRadiusXposed()
+                param.result = WeTypeSettings.keyCornerRadiusToHostUnits(corner)
             }
             Log.i("Success: Hook WeType keyboard key corner")
         }.onFailure {

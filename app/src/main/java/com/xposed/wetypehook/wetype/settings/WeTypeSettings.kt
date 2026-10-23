@@ -49,6 +49,7 @@ object WeTypeSettings {
     const val MAX_CORNER_RADIUS = DEFAULT_CORNER_RADIUS * 2
     const val DEFAULT_KEY_CORNER_RADIUS = 10
     const val MAX_KEY_CORNER_RADIUS = 40
+    private const val HOST_KEY_CORNER_OFFSET = 10
     const val DEFAULT_EDGE_HIGHLIGHT_ENABLED = true
     const val DEFAULT_EDGE_HIGHLIGHT_INTENSITY = 80
     const val DEFAULT_CANDIDATE_BACKGROUND_ALPHA = 150
@@ -152,6 +153,9 @@ object WeTypeSettings {
     fun getCornerRadius(context: Context): Int = readSnapshot(context).cornerRadius
 
     fun getKeyCornerRadius(context: Context): Int = readSnapshot(context).keyCornerRadius
+
+    // Preserve the existing setting offset. The host scales this design-unit value with its keys.
+    fun keyCornerRadiusToHostUnits(radius: Int): Float = (radius + HOST_KEY_CORNER_OFFSET).toFloat()
 
     fun isEdgeHighlightEnabled(context: Context): Boolean = readSnapshot(context).edgeHighlightEnabled
 
