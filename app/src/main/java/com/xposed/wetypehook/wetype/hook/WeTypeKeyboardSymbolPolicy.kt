@@ -27,7 +27,7 @@ internal fun resolveWeTypeKeyAppearance(
         val action = text.trim().lowercase(Locale.ROOT)
         val symbol = when (action) {
             "搜索", "搜尋", "search" -> "magnifyingglass"
-            "发送", "發送", "传送", "傳送", "send" -> "paperplane.fill"
+            "发送", "發送", "传送", "傳送", "send" -> "arrow.up"
             "完成", "done", "确定", "確定", "确认", "確認", "confirm" -> "checkmark"
             "下一项", "下一項", "下一个", "下一個", "下一步", "继续", "繼續", "next", "continue",
             "前往", "开始", "開始", "go" -> "arrow.right"

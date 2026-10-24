@@ -1,5 +1,6 @@
 package com.xposed.wetypehook.wetype.hook
 
+import android.content.Context
 import android.content.res.AssetManager
 import android.content.res.Configuration
 import android.content.res.Resources
@@ -8,9 +9,12 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
 import com.xposed.wetypehook.wetype.graphics.SfSymbols
 import com.xposed.wetypehook.xposed.HookEnvironment
 import com.xposed.wetypehook.xposed.Log
+import com.xposed.wetypehook.xposed.hookAfter
 import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import java.lang.reflect.Field
@@ -34,6 +38,7 @@ internal object WeTypeKeyboardSymbols {
             val keyboard = loadClassOrNull(KEYBOARD)?.getMethod("getActionButton")?.declaringClass
                 ?: error("Self-draw keyboard accessor unavailable")
             val buttonType = keyboard.getMethod("getActionButton").returnType
+            hookPopupFontMetrics(buttonType, keyboard)
             val access = ButtonAccess(buttonType, keyboard)
             val drawerType = keyboard.getMethod("getButtonDrawer").returnType
             val addDrawer = drawerType.declaredMethods.single { method ->
@@ -62,6 +67,40 @@ internal object WeTypeKeyboardSymbols {
         }.onFailure {
             Log.e("Failed: Hook WeType SF keyboard symbols")
             Log.e(it)
+        }
+    }
+
+    private fun hookPopupFontMetrics(buttonType: Class<*>, keyboard: Class<*>) {
+        runCatching {
+            val showPopup = buttonType.declaredMethods.single { method ->
+                !Modifier.isStatic(method.modifiers) && method.returnType == Void.TYPE &&
+                    method.parameterTypes.contentEquals(arrayOf(Context::class.java, keyboard))
+            }
+            val popupView = buttonType.declaredMethods.single { method ->
+                !Modifier.isStatic(method.modifiers) && method.parameterTypes.isEmpty() &&
+                    method.returnType == View::class.java
+            }.apply { isAccessible = true }
+            // This button entry point creates the single-character bubble, including its swipe label.
+            showPopup.hookAfter { param ->
+                val popup = popupView.invoke(param.thisObject) as? ViewGroup ?: return@hookAfter
+                removePopupFontPadding(popup)
+            }
+            Log.i("Success: Hook WeType SF key popup font metrics")
+        }.onFailure {
+            Log.e("Failed: Hook WeType key popup font metrics")
+            Log.e(it)
+        }
+    }
+
+    private fun removePopupFontPadding(view: View) {
+        if (view is TextView) {
+            val params = view.layoutParams ?: return
+            // SF Pro's font-wide extents include symbols far beyond the bubble's text line.
+            if (params.width == ViewGroup.LayoutParams.MATCH_PARENT &&
+                params.height == ViewGroup.LayoutParams.MATCH_PARENT && view.includeFontPadding
+            ) view.includeFontPadding = false
+        } else if (view is ViewGroup) {
+            for (index in 0 until view.childCount) removePopupFontPadding(view.getChildAt(index))
         }
     }
 

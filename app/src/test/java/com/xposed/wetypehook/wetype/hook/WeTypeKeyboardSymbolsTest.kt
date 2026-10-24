@@ -11,7 +11,7 @@ class WeTypeKeyboardSymbolsTest {
     fun editorActionsKeepTheirSpecificMeaning() {
         mapOf(
             "搜索" to "magnifyingglass", " Search " to "magnifyingglass",
-            "发送" to "paperplane.fill", "send" to "paperplane.fill",
+            "发送" to "arrow.up", "send" to "arrow.up",
             "完成" to "checkmark", "done" to "checkmark",
             "确定" to "checkmark", "确认" to "checkmark", "Confirm" to "checkmark",
             "下一项" to "arrow.right", "next" to "arrow.right",
