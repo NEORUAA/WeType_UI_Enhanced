@@ -233,6 +233,7 @@ internal object WeTypeKeyboardSymbols {
         private val keyId = keyData.returnType.getMethod("getId")
         private val parent = type.methods.single { it.parameterTypes.isEmpty() && it.returnType == keyboard }
         private val drawRect = property("drawRect", Rect::class.java)
+        private val buttonHeight = runCatching { property("height", Int::class.javaPrimitiveType!!) }.getOrNull()
         private val drawerType = property("drawerType", String::class.java)
         private val mainText = property("mainText", String::class.java)
         private val mainTextSize = property("mainTextSize", Int::class.javaPrimitiveType!!)
@@ -364,13 +365,16 @@ internal object WeTypeKeyboardSymbols {
         }
 
         private fun symbolReferenceHeight(button: Any, symbol: String, keyHeight: Int): Float {
-            val view = parent.invoke(button) as? View ?: return keyHeight.toFloat()
-            if (view.javaClass.name != EMOJI_KEYBOARD) return keyHeight.toFloat()
+            // Multi-row alignment stretches drawRect but preserves the scaled nominal key height.
+            val nominalHeight = (buttonHeight?.invoke(button) as? Int)?.takeIf { it > 0 } ?: keyHeight
+            val referenceHeight = minOf(keyHeight, nominalHeight).toFloat()
+            val view = parent.invoke(button) as? View ?: return referenceHeight
+            if (view.javaClass.name != EMOJI_KEYBOARD) return referenceHeight
             val id = (keyId.invoke(keyData.invoke(button)) as String).removeSuffix("_copy")
             if (!((id == "return" && symbol == "arrow.left") ||
-                    (id == "delete" && symbol == "delete.left"))) return keyHeight.toFloat()
+                    (id == "delete" && symbol == "delete.left"))) return referenceHeight
             val scaledIconHeight = (iconHeight?.invoke(button) as? Int)?.takeIf { it > 0 }
-                ?: return keyHeight.toFloat()
+                ?: return referenceHeight
             // Host design units: a standard key is 130/92 high and its icon box is 64 high.
             // Use the live icon scale so the compact emoji footer does not shrink these actions.
             val standardKeyHeight = if (view.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) 92f else 130f
