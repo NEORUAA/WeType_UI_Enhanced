@@ -97,9 +97,7 @@ class MainHook : XposedModule() {
     )
     private val installedHookTokens = ConcurrentHashMap.newKeySet<String>()
     private val imeInputFramesByDecor = WeakHashMap<View, WeakReference<ViewGroup>>()
-    private val originalImeContentBottomPaddings = WeakHashMap<View, Int>()
-    private data class FullscreenAreaLayout(val height: Int, val weight: Float)
-    private val originalFullscreenAreaLayouts = WeakHashMap<ViewGroup, FullscreenAreaLayout>()
+    private val miuiBottomInsetCompensations = WeakHashMap<ViewGroup, MiuiBottomInsetCompensation>()
     private val adjustedImeContentViews = WeakHashMap<ViewGroup, WeakReference<View>>()
     private data class BottomIconTranslation(var original: Float, var applied: Float)
     private val bottomIconTranslations = WeakHashMap<View, BottomIconTranslation>()
@@ -506,6 +504,11 @@ class MainHook : XposedModule() {
         rootView: View,
         bottomArea: View
     ) {
+        miuiBottomFrameViews[inputFrame]?.let { previous ->
+            if (previous.first.get() !== fullscreenArea) {
+                restoreMiuiBottomFrame(inputFrame, previous.first.get())
+            }
+        }
         miuiBottomFrameViews[inputFrame] = Triple(
             WeakReference(fullscreenArea),
             WeakReference(rootView),
@@ -518,6 +521,29 @@ class MainHook : XposedModule() {
         val token = "miuiBottomRootMeasurement"
         if (!installedHookTokens.add(token)) return
         runCatching {
+            // The host legitimately rebuilds its layout during lifecycle and inset
+            // dispatch. Release our values before those callbacks, retaining any
+            // conflict decision for this frame. Only unexpected writes between
+            // measurements should make the compensation yield permanently.
+            InputMethodService::class.java.declaredMethods.filter {
+                it.name == "showWindow" || it.name == "hideWindow" ||
+                    it.name == "doStartInput" || it.name == "updateFullscreenMode"
+            }.forEach { method ->
+                method.isAccessible = true
+                method.hookBefore { param ->
+                    val inputFrame = param.thisObject?.getObjectAs<ViewGroup>("mInputFrame")
+                        ?: return@hookBefore
+                    restoreMiuiBottomFrame(inputFrame, miuiBottomFrameViews[inputFrame]?.first?.get())
+                }
+            }
+            // Intercept the window root once per dispatch instead of every child View.
+            findMethod("android.view.ViewRootImpl") {
+                name == "dispatchApplyInsets" && parameterTypes.sameAs(View::class.java)
+            }.hookBefore { param ->
+                val decorView = param.argumentOrNull(0) as? View ?: return@hookBefore
+                val inputFrame = imeInputFramesByDecor[decorView]?.get() ?: return@hookBefore
+                restoreMiuiBottomFrame(inputFrame, miuiBottomFrameViews[inputFrame]?.first?.get())
+            }
             val measure = findMethod("com.android.internal.policy.DecorView") {
                 name == "onMeasure" && parameterTypes.sameAs(Int::class.java, Int::class.java)
             }
@@ -686,91 +712,72 @@ class MainHook : XposedModule() {
             ?.getInsets(WindowInsets.Type.navigationBars())
             ?.bottom
 
-        if (navigationInset == null || navigationInset <= 0 || contentView == null ||
-            !supportsBottomInsetCompensation(rootView, fullscreenArea, inputFrame, contentView, bottomArea)
-        ) {
-            restoreMiuiBottomFrame(inputFrame, fullscreenArea)
-            return
-        }
         val adjustedContentReference = adjustedImeContentViews[inputFrame]
         val adjustedContentView = adjustedContentReference?.get()
         if (adjustedContentReference != null && adjustedContentView !== contentView) {
             restoreMiuiBottomFrame(inputFrame, fullscreenArea)
         }
-
-        val originalPadding = originalImeContentBottomPaddings[contentView]
-        val isCurrentContentAdjusted = adjustedImeContentViews[inputFrame]?.get() === contentView
-        val isAlreadyAdjusted = isCurrentContentAdjusted &&
-            originalPadding != null && contentView.paddingBottom == 0
-        if (contentView.paddingBottom != navigationInset && !isAlreadyAdjusted) {
-            if (isCurrentContentAdjusted) restoreMiuiBottomFrame(inputFrame, fullscreenArea)
-            return
+        val compensation = miuiBottomInsetCompensations.getOrPut(inputFrame) {
+            MiuiBottomInsetCompensation()
         }
-
-        // This padding was identified as the system navigation inset. Track its live
-        // value while removed, so leaving this mode restores the current inset.
-        if (originalPadding != navigationInset) {
-            originalImeContentBottomPaddings[contentView] = navigationInset
-        }
-        if (!isAlreadyAdjusted) {
-            contentView.setPadding(
-                contentView.paddingLeft,
-                contentView.paddingTop,
-                contentView.paddingRight,
-                contentView.paddingBottom - navigationInset
-            )
-        }
-        if (!isCurrentContentAdjusted) {
-            adjustedImeContentViews[inputFrame] = WeakReference(contentView)
-        }
-        val frameParams = inputFrame.layoutParams as LinearLayout.LayoutParams
-        if (frameParams.height == ViewGroup.LayoutParams.WRAP_CONTENT && frameParams.weight == 0f) {
-            useFlexibleFullscreenSpacer(fullscreenArea)
+        val frameParams = inputFrame.layoutParams as? LinearLayout.LayoutParams
+        val update = compensation.reconcile(
+            eligible = contentView != null && supportsBottomInsetCompensation(
+                rootView, fullscreenArea, inputFrame, contentView, bottomArea
+            ),
+            navigationInset = navigationInset,
+            paddingBottom = contentView?.paddingBottom,
+            spacerLayout = fullscreenSpacerLayout(fullscreenArea),
+            // Full-height frames such as Gboard already own the remaining space.
+            useFlexibleSpacer = frameParams?.height == ViewGroup.LayoutParams.WRAP_CONTENT &&
+                frameParams.weight == 0f
+        )
+        applyMiuiBottomInsetUpdate(update, contentView, fullscreenArea)
+        if (compensation.hasAdjustedPadding && contentView != null) {
+            if (adjustedContentView !== contentView) {
+                adjustedImeContentViews[inputFrame] = WeakReference(contentView)
+            }
         } else {
-            // A full-height input frame owns the remaining space (for example Gboard).
-            // Giving the extraction spacer weight as well would shrink the input frame.
-            restoreFullscreenSpacer(fullscreenArea)
+            adjustedImeContentViews.remove(inputFrame)
         }
     }
 
-    private fun useFlexibleFullscreenSpacer(fullscreenArea: ViewGroup) {
-        // Only the inactive extraction area is a spacer. Visible extraction/candidate
-        // content must retain the host's own layout policy.
-        if (fullscreenArea.visibility != View.INVISIBLE) return
-        val params = fullscreenArea.layoutParams as? LinearLayout.LayoutParams ?: return
-        if (params.height != 0 || params.weight != 1f) {
-            originalFullscreenAreaLayouts[fullscreenArea] = FullscreenAreaLayout(params.height, params.weight)
-            // Let LinearLayout assign the remaining space on every measurement. Freezing
-            // a measured height here can constrain subsequent keyboard size changes.
-            params.height = 0
-            params.weight = 1f
-            fullscreenArea.layoutParams = params
+    private fun fullscreenSpacerLayout(fullscreenArea: ViewGroup?): MiuiFullscreenSpacerLayout? =
+        (fullscreenArea?.layoutParams as? LinearLayout.LayoutParams)?.let {
+            MiuiFullscreenSpacerLayout(it.height, it.weight)
         }
-    }
 
-    private fun restoreMiuiBottomFrame(inputFrame: ViewGroup, fullscreenArea: ViewGroup) {
-        adjustedImeContentViews.remove(inputFrame)?.get()?.let { view ->
-            val paddingBottom = originalImeContentBottomPaddings.remove(view)
-            if (paddingBottom != null && view.paddingBottom == 0) {
-                view.setPadding(
-                    view.paddingLeft,
-                    view.paddingTop,
-                    view.paddingRight,
+    private fun applyMiuiBottomInsetUpdate(
+        update: MiuiBottomInsetUpdate,
+        contentView: View?,
+        fullscreenArea: ViewGroup?
+    ) {
+        update.paddingBottom?.let { paddingBottom ->
+            if (contentView != null && contentView.paddingBottom != paddingBottom) {
+                contentView.setPadding(
+                    contentView.paddingLeft,
+                    contentView.paddingTop,
+                    contentView.paddingRight,
                     paddingBottom
                 )
             }
         }
-        restoreFullscreenSpacer(fullscreenArea)
+        update.spacerLayout?.let { layout ->
+            val params = fullscreenArea?.layoutParams as? LinearLayout.LayoutParams ?: return@let
+            if (params.height != layout.height || params.weight != layout.weight) {
+                params.height = layout.height
+                params.weight = layout.weight
+                fullscreenArea.layoutParams = params
+            }
+        }
     }
 
-    private fun restoreFullscreenSpacer(fullscreenArea: ViewGroup) {
-        val original = originalFullscreenAreaLayouts.remove(fullscreenArea) ?: return
-        val params = fullscreenArea.layoutParams as? LinearLayout.LayoutParams ?: return
-        if (params.height == 0 && params.weight == 1f) {
-            params.height = original.height
-            params.weight = original.weight
-            fullscreenArea.layoutParams = params
-        }
+    private fun restoreMiuiBottomFrame(inputFrame: ViewGroup, fullscreenArea: ViewGroup?) {
+        val contentView = adjustedImeContentViews.remove(inputFrame)?.get()
+        val update = miuiBottomInsetCompensations[inputFrame]?.release(
+            contentView?.paddingBottom, fullscreenSpacerLayout(fullscreenArea)
+        ) ?: return
+        applyMiuiBottomInsetUpdate(update, contentView, fullscreenArea)
     }
 
     private fun supportsBottomInsetCompensation(
@@ -1421,9 +1428,7 @@ class MainHook : XposedModule() {
         bottomIconTranslations.keys.toList().forEach(::restoreMiuiBottomIcon)
         keyboardGeometryAccess.clear()
         miuiBottomFrameViews.forEach { (inputFrame, frameViews) ->
-            frameViews.first.get()?.let { fullscreenArea ->
-                restoreMiuiBottomFrame(inputFrame, fullscreenArea)
-            }
+            restoreMiuiBottomFrame(inputFrame, frameViews.first.get())
         }
         originalAboutLogoStates.forEach { (view, state) ->
             view.setOnClickListener(state.clickListener)
@@ -1432,8 +1437,7 @@ class MainHook : XposedModule() {
         }
 
         imeInputFramesByDecor.clear()
-        originalImeContentBottomPaddings.clear()
-        originalFullscreenAreaLayouts.clear()
+        miuiBottomInsetCompensations.clear()
         adjustedImeContentViews.clear()
         miuiBottomFrameViews.clear()
         originalAboutLogoStates.clear()
