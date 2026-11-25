@@ -28,6 +28,7 @@ import com.xposed.wetypehook.xposed.HookEnvironment
 import com.xposed.wetypehook.xposed.findMethodInHierarchy
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
+import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.invokeMethodAs
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
@@ -195,6 +196,7 @@ internal object WeTypeWindowHooks {
         runCatching {
             val inputMethodService = loadClassOrNull("android.inputmethodservice.InputMethodService")
                 ?: error("Failed to load InputMethodService")
+            val hostService = loadClassOrNull("com.tencent.wetype.plugin.hld.WxHldService") ?: inputMethodService
 
             inputMethodService.getMethod(
                 "onStartInputView",
@@ -203,6 +205,20 @@ internal object WeTypeWindowHooks {
             ).hookAfter { param ->
                 onWindowStage(param.thisObject, "onStartInputView")
                 reconcileCurrentResourceViews(param.thisObject)
+            }
+            if (WeTypeColorOsMaterial.isSupported) {
+                runCatching {
+                    hostService.getMethod(
+                        "onStartInputView",
+                        EditorInfo::class.java,
+                        Boolean::class.javaPrimitiveType
+                    ).hookBefore { param ->
+                        val service = param.thisObject as? InputMethodService ?: return@hookBefore
+                        val editor = param.argumentOrNull(0) as? EditorInfo
+                        // Shift and other programmatic keys can bind their fills before onWindowShown.
+                        updateColorOsEditorTheme(service, editor)
+                    }
+                }.onFailure { Log.e(it) }
             }
             runCatching {
                 inputMethodService.getMethod("onWindowShown").hookAfter { param ->
@@ -216,9 +232,7 @@ internal object WeTypeWindowHooks {
                 }
             }
             // Observe the final host result, including its normal/floating/hardware proxy.
-            val insetService = loadClassOrNull("com.tencent.wetype.plugin.hld.WxHldService")
-                ?: inputMethodService
-            insetService.getMethod(
+            hostService.getMethod(
                 "onComputeInsets",
                 InputMethodService.Insets::class.java
             ).hookAfter { param ->
@@ -451,9 +465,7 @@ internal object WeTypeWindowHooks {
         val window = service.window?.window ?: return
         val decorView = window.decorView
         if (refreshStyle && WeTypeColorOsMaterial.isSupported) {
-            val useSearchSkin = service.currentInputEditorInfo?.packageName == COLOR_OS_GLOBAL_SEARCH &&
-                colorOsMaterialEnabled(service) && WeTypeColorOsMaterial.readEffects(service).blur
-            WeTypeThemeMode.updateColorOsSearchSkin(useSearchSkin, service.resources.configuration)
+            updateColorOsEditorTheme(service, service.currentInputEditorInfo)
         }
         val observer = decorView.viewTreeObserver
         if (!observer.isAlive) return
@@ -724,6 +736,12 @@ internal object WeTypeWindowHooks {
 
     private fun colorOsMaterialEnabled(context: Context): Boolean = WeTypeSettings.readProfilesXposed()
         .profile(WeTypeThemeMode.isPreferredDarkMode(context.resources)).hyperMaterialEnabled
+
+    private fun updateColorOsEditorTheme(service: InputMethodService, editor: EditorInfo?) {
+        val useSearchSkin = editor?.packageName == COLOR_OS_GLOBAL_SEARCH &&
+            colorOsMaterialEnabled(service) && WeTypeColorOsMaterial.readEffects(service).blur
+        WeTypeThemeMode.updateColorOsSearchSkin(useSearchSkin, service.resources.configuration)
+    }
 
     private fun applyBackgroundSurface(
         parent: ViewGroup,
