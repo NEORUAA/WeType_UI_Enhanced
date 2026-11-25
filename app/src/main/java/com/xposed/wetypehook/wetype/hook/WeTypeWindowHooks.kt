@@ -19,6 +19,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.ViewTreeObserver
 import android.view.Window
+import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import androidx.core.graphics.drawable.toDrawable
@@ -31,6 +32,7 @@ import com.xposed.wetypehook.xposed.invokeMethodAs
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
+import com.xposed.wetypehook.wetype.graphics.WeTypeColorOsMaterial
 import com.xposed.wetypehook.wetype.graphics.WeTypeCornerRadii
 import com.xposed.wetypehook.wetype.graphics.createWeTypeContinuousRoundedPath
 import com.xposed.wetypehook.wetype.settings.GlassMaterialOverrides
@@ -46,6 +48,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val WETYPE_COLLAPSED_IME_HEIGHT_THRESHOLD_PX = 2
 private const val WETYPE_FLOATING_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.float."
 private const val WETYPE_HARDWARE_VIEW_CLASS_PREFIX = "com.tencent.wetype.plugin.hld.hardware."
+private const val COLOR_OS_GLOBAL_SEARCH = "com.heytap.quicksearchbox"
 private val WETYPE_HARDWARE_VIEW_ID_NAMES = arrayOf(
     "hardware_keyboard_candidate_container_view",
     "hardware_keyboard_pending_container_view",
@@ -64,7 +67,8 @@ internal object WeTypeWindowHooks {
         val nightMode: Int,
         val density: Float,
         val hyperMaterialEnabled: Boolean,
-        val hyperMaterialAvailable: Boolean
+        val hyperMaterialAvailable: Boolean,
+        val colorOsBlurEnabled: Boolean
     )
 
     private class ContinuousCornerOutline(val cornerRadii: WeTypeCornerRadii) : ViewOutlineProvider() {
@@ -94,6 +98,7 @@ internal object WeTypeWindowHooks {
         var hyperMaterial: WeTypeHyperMaterial? = null,
         var stopMaterialObserver: (() -> Unit)? = null,
         var window: WeakReference<Window>? = null,
+        var originalNavigationBarAppearance: Int? = null,
         var resourceReconcilePending: Boolean = false,
         var backgroundDecorView: WeakReference<View>? = null,
         var backgroundObserver: WeakReference<ViewTreeObserver>? = null,
@@ -102,6 +107,8 @@ internal object WeTypeWindowHooks {
         var backgroundUpdatePending: Boolean = false,
         var backgroundStyleDirty: Boolean = true,
         var backgroundStyle: BackgroundStyle? = null,
+        var colorOsEffects: WeTypeColorOsMaterial.Effects = WeTypeColorOsMaterial.Effects(),
+        var colorOsKeyDarkMode: Boolean? = null,
         var backgroundViewRoot: Any? = null,
         val backgroundBounds: Rect = Rect(),
         var awaitingBackgroundTexture: Boolean = false,
@@ -137,6 +144,8 @@ internal object WeTypeWindowHooks {
     private val weTypeWindowStates = WeakHashMap<Any, WeTypeWindowState>()
     private val floatingBackgroundStates = WeakHashMap<ViewGroup, WeTypeWindowState>()
     private var miuiClipboardVisibilityProvider: (() -> Boolean)? = null
+    @Volatile var colorOsKeyMaterialDarkMode: Boolean? = null
+        private set
 
     fun setMiuiClipboardVisibilityProvider(provider: () -> Boolean) {
         miuiClipboardVisibilityProvider = provider
@@ -152,11 +161,14 @@ internal object WeTypeWindowHooks {
         }
         val cleaned = runOnMainThreadBlocking {
             miuiClipboardVisibilityProvider = null
+            colorOsKeyMaterialDarkMode = null
+            WeTypeThemeMode.updateColorOsSearchSkin(false)
             WeTypeFloatingBackgrounds.clearAll()
             WeTypeOverlayCompositor.clearAll()
             states.forEach { state ->
                 state.windowVisible = false
                 removeBackgroundListeners(state)
+                restoreColorOsNavigationAppearance(state)
                 restoreWindowState(state)
                 removeBackgroundCarrier(state)
             }
@@ -215,6 +227,7 @@ internal object WeTypeWindowHooks {
             runCatching {
                 inputMethodService.getMethod("onWindowHidden").hookAfter { param ->
                     onWindowInactive(param.thisObject, removeCarrier = false)
+                    WeTypeThemeMode.updateColorOsSearchSkin(false, (param.thisObject as? Context)?.resources?.configuration)
                 }
             }
             runCatching {
@@ -225,6 +238,7 @@ internal object WeTypeWindowHooks {
             runCatching {
                 inputMethodService.getMethod("onDestroy").hookAfter { param ->
                     onWindowInactive(param.thisObject, removeCarrier = true)
+                    WeTypeThemeMode.updateColorOsSearchSkin(false, (param.thisObject as? Context)?.resources?.configuration)
                 }
             }
             Log.i("Success: Hook WeType window blur")
@@ -433,14 +447,21 @@ internal object WeTypeWindowHooks {
     private fun scheduleWindowBlur(inputMethodService: Any, refreshStyle: Boolean = true) {
         val state = getWindowState(inputMethodService)
         if (!state.windowVisible) return
-        val window = (inputMethodService as? InputMethodService)?.window?.window ?: return
+        val service = inputMethodService as? InputMethodService ?: return
+        val window = service.window?.window ?: return
         val decorView = window.decorView
+        if (refreshStyle && WeTypeColorOsMaterial.isSupported) {
+            val useSearchSkin = service.currentInputEditorInfo?.packageName == COLOR_OS_GLOBAL_SEARCH &&
+                colorOsMaterialEnabled(service) && WeTypeColorOsMaterial.readEffects(service).blur
+            WeTypeThemeMode.updateColorOsSearchSkin(useSearchSkin, service.resources.configuration)
+        }
         val observer = decorView.viewTreeObserver
         if (!observer.isAlive) return
+        if (state.window?.get() !== window) restoreColorOsNavigationAppearance(state)
         state.window = WeakReference(window)
         if (state.stopMaterialObserver == null) {
             val serviceReference = WeakReference(inputMethodService)
-            state.stopMaterialObserver = WeTypeHyperMaterial.observeAvailability(decorView.context) {
+            state.stopMaterialObserver = observeMaterialAvailability(decorView.context) {
                 serviceReference.get()?.let { scheduleWindowBlur(it) }
             }
         }
@@ -527,6 +548,7 @@ internal object WeTypeWindowHooks {
             val state = getWindowState(inputMethodService)
             if (!state.windowVisible && !removeCarrier) return@runCatching
             state.windowVisible = false
+            restoreColorOsNavigationAppearance(state)
             state.stopMaterialObserver?.invoke()
             state.stopMaterialObserver = null
             state.computedVisibleImeHeightPx = null
@@ -650,6 +672,30 @@ internal object WeTypeWindowHooks {
         }
 
         applyBackgroundSurface(decorGroup, context, state, cornerRadii, bounds.top, backgroundHeight)
+        updateColorOsNavigationAppearance(window, state)
+    }
+
+    private fun updateColorOsNavigationAppearance(window: Window, state: WeTypeWindowState) {
+        val style = state.backgroundStyle
+        if (style?.colorOsBlurEnabled != true) {
+            restoreColorOsNavigationAppearance(state)
+            return
+        }
+        val controller = window.insetsController ?: return
+        // The IME navigation bar uses this bit for both the dismiss and picker icons.
+        val mask = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        val appearance = controller.systemBarsAppearance and mask
+        if (state.originalNavigationBarAppearance == null) state.originalNavigationBarAppearance = appearance
+        val desired = if (style.nightMode == Configuration.UI_MODE_NIGHT_YES) 0 else mask
+        if (appearance != desired) controller.setSystemBarsAppearance(desired, mask)
+    }
+
+    private fun restoreColorOsNavigationAppearance(state: WeTypeWindowState) {
+        val appearance = state.originalNavigationBarAppearance ?: return
+        state.originalNavigationBarAppearance = null
+        state.window?.get()?.insetsController?.setSystemBarsAppearance(
+            appearance, WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        )
     }
 
     private fun applyFloatingBackground(root: ViewGroup, bounds: Rect, radius: Float) {
@@ -661,7 +707,7 @@ internal object WeTypeWindowHooks {
             bounds.top, bounds.height(), bounds.left, bounds.width())
         if (state.stopMaterialObserver == null) {
             val reference = WeakReference(root)
-            state.stopMaterialObserver = WeTypeHyperMaterial.observeAvailability(root.context) {
+            state.stopMaterialObserver = observeMaterialAvailability(root.context) {
                 state.backgroundStyleDirty = true
                 reference.get()?.invalidate()
             }
@@ -671,6 +717,13 @@ internal object WeTypeWindowHooks {
     private fun removeFloatingBackground(root: ViewGroup) {
         floatingBackgroundStates.remove(root)?.let(::removeBackgroundCarrier)
     }
+
+    private fun observeMaterialAvailability(context: Context, onChanged: () -> Unit): (() -> Unit)? =
+        if (WeTypeColorOsMaterial.isSupported) WeTypeColorOsMaterial.observeEffects(context, onChanged)
+        else WeTypeHyperMaterial.observeAvailability(context, onChanged)
+
+    private fun colorOsMaterialEnabled(context: Context): Boolean = WeTypeSettings.readProfilesXposed()
+        .profile(WeTypeThemeMode.isPreferredDarkMode(context.resources)).hyperMaterialEnabled
 
     private fun applyBackgroundSurface(
         parent: ViewGroup,
@@ -683,25 +736,42 @@ internal object WeTypeWindowHooks {
         width: Int = parent.width
     ) {
         val settings = WeTypeSettings.readSnapshotXposed(context.resources)
-        val overrides = if (settings.hyperMaterialEnabled && WeTypeHyperMaterial.areGlassOverridesAvailable()) {
+        val isColorOs = WeTypeColorOsMaterial.isSupported
+        val useColorOsMaterial = isColorOs && colorOsMaterialEnabled(context)
+        val hyperMaterialEnabled = settings.hyperMaterialEnabled && !isColorOs
+        val overrides = if (hyperMaterialEnabled && WeTypeHyperMaterial.areGlassOverridesAvailable()) {
             settings.glassOverrides
         } else GlassMaterialOverrides()
         val carrier = ensureBackgroundCarrier(context, parent, state, overrides)
         carrier.visibility = View.VISIBLE
+        val isDark = WeTypeSettings.isHostDarkMode(context.resources)
+        if (isColorOs) {
+            if (state.backgroundStyleDirty || state.backgroundStyle == null) {
+                state.colorOsEffects = WeTypeColorOsMaterial.readEffects(context)
+            }
+            val keyMaterial = isDark.takeIf { useColorOsMaterial && state.colorOsEffects.stroke }
+            colorOsKeyMaterialDarkMode = keyMaterial
+            if (state.colorOsKeyDarkMode != keyMaterial) {
+                state.colorOsKeyDarkMode = keyMaterial
+                // The floating popup draws the keys beside its background container.
+                invalidateColorOsKeys(if (state.windowVisible) parent else parent.parent as? View ?: parent)
+            }
+        }
         val style = BackgroundStyle(
             color = settings.backgroundColor,
             blurRadius = settings.blurRadius,
             edgeHighlightEnabled = settings.edgeHighlightEnabled,
             edgeHighlightIntensity = settings.edgeHighlightIntensity,
             cornerRadii = cornerRadii,
-            nightMode = if (WeTypeSettings.isHostDarkMode(context.resources)) {
+            nightMode = if (isDark) {
                 Configuration.UI_MODE_NIGHT_YES
             } else Configuration.UI_MODE_NIGHT_NO,
             density = context.resources.displayMetrics.density,
-            hyperMaterialEnabled = settings.hyperMaterialEnabled,
-            hyperMaterialAvailable = if (state.backgroundStyleDirty || state.backgroundStyle == null) {
+            hyperMaterialEnabled = hyperMaterialEnabled,
+            hyperMaterialAvailable = if (isColorOs) false else if (state.backgroundStyleDirty || state.backgroundStyle == null) {
                 WeTypeHyperMaterial.isAvailable(context)
-            } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable
+            } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable,
+            colorOsBlurEnabled = useColorOsMaterial && state.colorOsEffects.blur
         )
         val viewRoot = if (state.backgroundStyleDirty || carrier.background == null) {
             runCatching { carrier.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull()
@@ -732,7 +802,10 @@ internal object WeTypeWindowHooks {
             } else {
                 cancelBackgroundTextureWait(state)
                 material.clear()
-                carrier.background = createBackgroundDrawable(carrier, context, style)
+                carrier.background = if (style.colorOsBlurEnabled) {
+                    WeTypeColorOsMaterial.createBackground(carrier, isDark, cornerRadii)
+                        ?: createTintDrawable(WeTypeColorOsMaterial.backgroundTint(isDark), cornerRadii)
+                } else createBackgroundDrawable(carrier, context, style)
             }
             state.backgroundStyle = style
             state.backgroundViewRoot = viewRoot
@@ -744,6 +817,14 @@ internal object WeTypeWindowHooks {
         state.backgroundBounds.set(left, top, left + width, top + height)
         layoutBackgroundCarrier(carrier, state.backgroundBounds)
         if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(cornerRadii)
+    }
+
+    private fun invalidateColorOsKeys(view: View) {
+        if (view.visibility != View.VISIBLE) return
+        view.invalidate()
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) invalidateColorOsKeys(view.getChildAt(index))
+        }
     }
 
     private fun restoreInactiveBackgroundGeometry(state: WeTypeWindowState) {
@@ -852,6 +933,7 @@ internal object WeTypeWindowHooks {
 
     private fun hideBackgroundCarrier(state: WeTypeWindowState) {
         cancelBackgroundTextureWait(state)
+        restoreColorOsNavigationAppearance(state)
         val carrier = state.backgroundCarrier ?: return
         carrier.visibility = View.INVISIBLE
         if (state.backgroundStyle?.hyperMaterialEnabled == true) {

@@ -113,6 +113,9 @@
     <string name="settings_hyper_material_desc">Use the same tint, blur, shadow and highlights as XiaoAI IME. Keeps custom background corners; overrides background color, blur and highlight settings.</string>
     <string name="settings_hyper_material_unavailable">Requires supported system material APIs and system advanced visual effects to be enabled.</string>
     <string name="settings_hyper_material_preview">Material</string>
+    <string name="settings_coloros_material_title">Use ColorOS keyboard effects</string>
+    <string name="settings_coloros_material_desc">Follows system Visual Blur and Flowing Outline settings. With Visual Blur enabled, Global Search uses the dark blur material.</string>
+    <string name="settings_coloros_material_unavailable">Enable Visual Blur or Flowing Outline in ColorOS settings.</string>
     <string name="settings_glass_params">Glass effect parameters</string>
     <string name="settings_glass_params_desc">42 finite numbers, separated by commas; keeps the native parameter order and units.</string>
     <string name="settings_glass_blur">Glass blur radii</string>

@@ -113,6 +113,9 @@
     <string name="settings_hyper_material_desc">使用与超级小爱输入法相同的背景颜色、模糊、阴影与高光，保留背景平滑圆角；原背景颜色、模糊与高光设置暂不生效。</string>
     <string name="settings_hyper_material_unavailable">当前系统不支持所需材质接口，或未开启系统高级材质 / 灵动视效。</string>
     <string name="settings_hyper_material_preview">系统材质</string>
+    <string name="settings_coloros_material_title">使用 ColorOS 键盘质感视效</string>
+    <string name="settings_coloros_material_desc">跟随系统的视觉模糊与流光轮廓。开启视觉模糊后，全局搜索使用深色模糊材质。</string>
+    <string name="settings_coloros_material_unavailable">请在系统「质感视效」中开启「视觉模糊」或「流光轮廓」。</string>
     <string name="settings_glass_params">玻璃效果参数</string>
     <string name="settings_glass_params_desc">42 个有限数值，以逗号分隔，保持接口原始顺序与单位。</string>
     <string name="settings_glass_blur">玻璃模糊半径</string>

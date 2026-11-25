@@ -7,9 +7,14 @@ import android.content.res.Resources
 import android.content.res.TypedArray
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Outline
+import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
@@ -23,6 +28,7 @@ import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.hookReturnConstant
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import com.xposed.wetypehook.wetype.graphics.SfSymbols
+import com.xposed.wetypehook.wetype.graphics.WeTypeColorOsMaterial
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroup
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorMode
 import com.xposed.wetypehook.wetype.settings.WeTypeAppearanceColorGroups
@@ -30,6 +36,7 @@ import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 import com.xposed.wetypehook.wetype.settings.CANDIDATE_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.LIGHT_KEY_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.DARK_KEY_COLOR_GROUP_ID
+import java.lang.ref.WeakReference
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.Collections
@@ -86,6 +93,9 @@ internal object WeTypeResourceHooks {
         WeakHashMap<ImageView, LogoHostState>()
     )
     private val restoringLogoDrawable = ThreadLocal.withInitial { false }
+    private var toolbarLogoContainerId: Int? = null
+    private var colorOsToolbarContainerId: Int? = null
+    private val toolbarContours = WeakHashMap<View, ToolbarContour>()
     private val candidateItemRootBaseLeftPaddingPx = Collections.synchronizedMap(
         WeakHashMap<Any, Int>()
     )
@@ -728,6 +738,9 @@ internal object WeTypeResourceHooks {
         runCatching {
             val sClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s") ?: return
             val logoIvId = sClass.getField("logo_iv").getInt(null)
+            if (WeTypeColorOsMaterial.isSupported) {
+                toolbarLogoContainerId = runCatching { sClass.getField("logo_container_rl").getInt(null) }.getOrNull()
+            }
 
             ImageView::class.java.getMethod(
                 "setImageResource",
@@ -741,7 +754,7 @@ internal object WeTypeResourceHooks {
                     replacedLogoStates[imageView] = LogoHostState(resourceId = resId)
                 }
                 imageView.setTag(LOGO_RESOURCE_TAG_KEY, resId)
-                imageView.setImageDrawable(WeTypeIconDrawable())
+                imageView.setImageDrawable(createKeyboardLogo(imageView))
                 param.result = null
             }
             ImageView::class.java.getMethod(
@@ -757,12 +770,22 @@ internal object WeTypeResourceHooks {
                     replacedLogoStates[imageView] = LogoHostState(drawable = drawableArg as? Drawable)
                 }
                 imageView.setTag(LOGO_RESOURCE_TAG_KEY, null)
-                param[0] = WeTypeIconDrawable()
+                param[0] = createKeyboardLogo(imageView)
             }
             Log.i("Success: Hook WeType keyboard logo")
         }.onFailure {
             Log.i("Failed: Hook WeType keyboard logo")
             Log.i(it)
+        }
+    }
+
+    private fun createKeyboardLogo(view: ImageView): WeTypeIconDrawable {
+        val containerId = toolbarLogoContainerId ?: return WeTypeIconDrawable()
+        val reference = WeakReference(view)
+        return WeTypeIconDrawable {
+            var parent = reference.get()?.parent as? View
+            while (parent != null && parent.id != containerId) parent = parent.parent as? View
+            parent != null
         }
     }
 
@@ -781,6 +804,7 @@ internal object WeTypeResourceHooks {
                     applyCandidatePinyinLeftMargin(view)
                     ensureCandidatePinyinMarginSync(view)
                 }
+                if (view.id == colorOsToolbarContainerId) ensureToolbarContour(view)
                 val imageView = view as? ImageView ?: return@forEachView
                 if (imageView.id != logoIvId || imageView.drawable is WeTypeIconDrawable) {
                     return@forEachView
@@ -793,7 +817,7 @@ internal object WeTypeResourceHooks {
                         LogoHostState(drawable = imageView.drawable)
                     }
                 }
-                imageView.setImageDrawable(WeTypeIconDrawable())
+                imageView.setImageDrawable(createKeyboardLogo(imageView))
             }
         }
     }
@@ -824,20 +848,94 @@ internal object WeTypeResourceHooks {
                 val drawable = param[0] as? Drawable ?: return@hookBefore
                 drawable.alpha = WeTypeSettings.getToolbarIconBgOpacityXposed()
             }
-            View::class.java.getMethod(
+            val setBackgroundDrawable = View::class.java.getMethod(
                 "setBackgroundDrawable",
                 Drawable::class.java
-            ).hookBefore { param ->
+            )
+            setBackgroundDrawable.hookBefore { param ->
                 val view = param.thisObject as? View ?: return@hookBefore
                 if (view.id != containerId) return@hookBefore
                 val drawable = param[0] as? Drawable ?: return@hookBefore
                 drawable.alpha = WeTypeSettings.getToolbarIconBgOpacityXposed()
+            }
+            if (WeTypeColorOsMaterial.isSupported) {
+                colorOsToolbarContainerId = containerId
+                setBackgroundDrawable.hookAfter { param ->
+                    val view = param.thisObject as? View ?: return@hookAfter
+                    if (view.id == containerId) ensureToolbarContour(view)
+                }
             }
             Log.i("Success: Hook WeType toolbar icon background")
         }.onFailure {
             Log.i("Failed: Hook WeType toolbar icon background")
             Log.i(it)
         }
+    }
+
+    private fun ensureToolbarContour(view: View) {
+        if (view.background == null || toolbarContours.containsKey(view)) return
+        val contour = ToolbarContour(view)
+        toolbarContours[view] = contour
+        view.addOnLayoutChangeListener(contour)
+        view.overlay.add(contour)
+    }
+
+    private class ToolbarContour(view: View) : Drawable(), View.OnLayoutChangeListener {
+        private val owner = WeakReference(view)
+        private val contour = WeTypeColorOsMaterial.KeyContour()
+        private val outline = Outline()
+        private val shapeBounds = Rect()
+        private val lastBounds = Rect()
+        private var lastRadius = Float.NaN
+        private var path = Path()
+
+        init {
+            setBounds(0, 0, view.width, view.height)
+        }
+
+        override fun onLayoutChange(
+            view: View, left: Int, top: Int, right: Int, bottom: Int,
+            oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int
+        ) {
+            setBounds(0, 0, right - left, bottom - top)
+        }
+
+        override fun draw(canvas: Canvas) {
+            val isDark = WeTypeWindowHooks.colorOsKeyMaterialDarkMode ?: return
+            val background = owner.get()?.background ?: return
+            if (background.alpha == 0) return
+            outline.setEmpty()
+            background.getOutline(outline)
+            val radius = if (outline.getRect(shapeBounds) && outline.radius > 0f) {
+                outline.radius
+            } else {
+                val shape = background.current as? GradientDrawable ?: return
+                if (shape.shape != GradientDrawable.OVAL) return
+                shapeBounds.set(shape.bounds)
+                -1f
+            }
+            if (shapeBounds.isEmpty) return
+            val left = shapeBounds.left.toFloat()
+            val top = shapeBounds.top.toFloat()
+            val right = shapeBounds.right.toFloat()
+            val bottom = shapeBounds.bottom.toFloat()
+            if (lastBounds != shapeBounds || lastRadius != radius) {
+                lastBounds.set(shapeBounds)
+                lastRadius = radius
+                path = Path().apply {
+                    if (radius > 0f) addRoundRect(left, top, right, bottom, radius, radius, Path.Direction.CW)
+                    else addOval(left, top, right, bottom, Path.Direction.CW)
+                }
+            }
+            contour.draw(canvas, path, left, top, right - left, bottom - top, isDark)
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+
+        override fun setColorFilter(colorFilter: ColorFilter?) = Unit
+
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private fun resolveCandidateItemRootClass(scrollViewClass: Class<*>): Class<*> =
@@ -1009,6 +1107,11 @@ internal object WeTypeResourceHooks {
      * before API 102 hot reload retires this module generation.
      */
     fun prepareForHotReload() {
+        toolbarContours.forEach { (view, contour) ->
+            view.removeOnLayoutChangeListener(contour)
+            view.overlay.remove(contour)
+        }
+        toolbarContours.clear()
         synchronized(candidatePinyinMarginListeners) {
             candidatePinyinMarginListeners.forEach { (view, listeners) ->
                 runCatching { view.removeOnLayoutChangeListener(listeners.layout) }

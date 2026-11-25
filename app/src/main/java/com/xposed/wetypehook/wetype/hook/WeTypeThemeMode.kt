@@ -1,7 +1,9 @@
 package com.xposed.wetypehook.wetype.hook
 
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.util.Log
+import com.xposed.wetypehook.wetype.graphics.WeTypeColorOsMaterial
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 import org.luckypray.dexkit.DexKitBridge
 import java.io.File
@@ -17,6 +19,9 @@ internal object WeTypeThemeMode {
     private var installedClassLoader: ClassLoader? = null
     private var installedSourceIdentity: String? = null
     private var installedProvider: (() -> Boolean?)? = null
+    private var colorOsSearchSkin: SearchSkin? = null
+
+    @Volatile private var originalSearchSkin: Int? = null
 
     @Synchronized
     fun install(classLoader: ClassLoader, sourceDir: String) {
@@ -30,6 +35,7 @@ internal object WeTypeThemeMode {
         installedClassLoader = classLoader
         installedSourceIdentity = sourceIdentity
         installedProvider = null
+        colorOsSearchSkin = null
         WeTypeSettings.setHostDarkModeProvider(null)
 
         val cacheKey = "$MANAGER_CACHE_PREFIX.${Integer.toHexString(sourceDir.hashCode())}"
@@ -85,8 +91,75 @@ internal object WeTypeThemeMode {
             }
         }
         installedProvider = provider
+        if (WeTypeColorOsMaterial.isSupported) {
+            colorOsSearchSkin = runCatching { SearchSkin(accessor.declaringClass) }
+                .onFailure { Log.w(TAG, "ColorOS search skin unavailable", it) }.getOrNull()
+        }
         WeTypeSettings.setHostDarkModeProvider(provider)
         Log.i(TAG, "Resolved host skin mode from ${accessor.declaringClass.name}")
+    }
+
+    fun isPreferredDarkMode(resources: Resources): Boolean {
+        // The saved toggle belongs to the selected skin, even while the search editor uses dark colors.
+        originalSearchSkin?.let { return it == colorOsSearchSkin?.darkIndex }
+        return WeTypeSettings.isHostDarkMode(resources)
+    }
+
+    fun updateColorOsSearchSkin(useDark: Boolean, configuration: Configuration? = null) {
+        val skin = colorOsSearchSkin ?: return
+        if (!useDark && originalSearchSkin == null) return
+        runCatching {
+            val manager = skin.manager.invoke(null) ?: return
+            val current = skin.current.invoke(manager) as Int
+            if (useDark) {
+                if (current == skin.darkIndex) return
+                originalSearchSkin = current
+                skin.change.invoke(manager, skin.darkIndex)
+            } else {
+                val original = originalSearchSkin ?: return
+                if (current == skin.darkIndex) skin.restore(manager, original, configuration)
+                originalSearchSkin = null
+            }
+        }.onFailure { Log.w(TAG, "Could not update the ColorOS search skin", it) }
+    }
+
+    private class SearchSkin(type: Class<*>) {
+        private val configurationHandler = type.declaredMethods.single { method ->
+            !Modifier.isStatic(method.modifiers) && method.returnType == Void.TYPE &&
+                method.parameterCount == 2 && method.parameterTypes[1] == Configuration::class.java
+        }.apply { isAccessible = true }
+        private val owner = type.declaredFields.single { Modifier.isStatic(it.modifiers) && it.type == type }
+            .apply { isAccessible = true }
+        private val managerType = configurationHandler.parameterTypes[0]
+        val manager: Method = type.declaredMethods.single { method ->
+            Modifier.isStatic(method.modifiers) && method.parameterCount == 0 && method.returnType == managerType
+        }.apply { isAccessible = true }
+        val current: Method = managerType.declaredMethods.single { method ->
+            !Modifier.isStatic(method.modifiers) && method.parameterCount == 0 &&
+                method.returnType == Int::class.javaPrimitiveType
+        }.apply { isAccessible = true }
+        val change: Method = managerType.declaredMethods.single { method ->
+            !Modifier.isStatic(method.modifiers) && method.returnType == Void.TYPE &&
+                method.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+        }.apply { isAccessible = true }
+
+        val darkIndex: Int = type.declaredMethods.single { method ->
+            !Modifier.isStatic(method.modifiers) && method.parameterCount == 0 && method.returnType.isEnum
+        }.returnType.let { skin ->
+            val dark = checkNotNull(skin.enumConstants).single { (it as Enum<*>).name == "SKIN_DARK" }
+            skin.declaredMethods.single { method ->
+                !Modifier.isStatic(method.modifiers) && method.parameterCount == 0 &&
+                    method.returnType == Int::class.javaPrimitiveType
+            }.apply { isAccessible = true }.invoke(dark) as Int
+        }
+
+        fun restore(target: Any, original: Int, configuration: Configuration?) {
+            // Re-evaluate the host's preference after a system or manual theme change in Search.
+            if (configuration != null && runCatching {
+                    configurationHandler.invoke(owner.get(null), target, configuration)
+                }.isSuccess) return
+            change.invoke(target, original)
+        }
     }
 
     private fun readCachedAccessor(

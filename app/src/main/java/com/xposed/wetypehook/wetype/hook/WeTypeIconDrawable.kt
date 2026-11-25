@@ -13,11 +13,12 @@ import android.util.Log
 import androidx.core.graphics.PathParser
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.SvgPathNormalizer
+import com.xposed.wetypehook.wetype.graphics.WeTypeColorOsMaterial
 import com.xposed.wetypehook.wetype.settings.ICON_COLOR_GROUP_ID
 import com.xposed.wetypehook.wetype.settings.WeTypeSettings
 import kotlin.math.roundToInt
 
-internal class WeTypeIconDrawable : Drawable() {
+internal class WeTypeIconDrawable(private val isToolbarLogo: () -> Boolean = { false }) : Drawable() {
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.WHITE
@@ -25,6 +26,9 @@ internal class WeTypeIconDrawable : Drawable() {
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
+    private val contour by lazy(LazyThreadSafetyMode.NONE) { WeTypeColorOsMaterial.KeyContour() }
+    private val circleBounds = RectF()
+    private var circle = BACKGROUND_PATH
 
     override fun draw(canvas: Canvas) {
         val bounds = bounds
@@ -40,24 +44,46 @@ internal class WeTypeIconDrawable : Drawable() {
         accentPaint.color = accentColor
         backgroundPaint.alpha = resolveAlpha(bgAlpha)
 
-        canvas.save()
         // 只在绘制阶段缩放并居中，不改 intrinsicWidth/Height：图标区尺寸由布局决定，
         // 若两处同时缩放会与固定尺寸 ImageView 叠乘成二次缩放。
         val iconScale = appearance.iconScale
-        canvas.translate(
-            bounds.left + bounds.width() * (1f - iconScale) / 2f,
-            bounds.top + bounds.height() * (1f - iconScale) / 2f
-        )
-        canvas.scale(
-            bounds.width() * iconScale / VIEWPORT_SIZE,
-            bounds.height() * iconScale / VIEWPORT_SIZE
-        )
-        canvas.drawPath(BACKGROUND_PATH, backgroundPaint)
+        val left = bounds.left + bounds.width() * (1f - iconScale) / 2f
+        val top = bounds.top + bounds.height() * (1f - iconScale) / 2f
+        val width = bounds.width() * iconScale
+        val height = bounds.height() * iconScale
+        val contourMode = WeTypeWindowHooks.colorOsKeyMaterialDarkMode?.takeIf {
+            backgroundPaint.alpha != 0 && isToolbarLogo()
+        }
+        if (contourMode != null) {
+            val path = scaledCircle(left, top, width, height)
+            canvas.drawPath(path, backgroundPaint)
+            contour.draw(canvas, path, left, top, width, height, contourMode)
+        }
+        canvas.save()
+        canvas.translate(left, top)
+        canvas.scale(width / VIEWPORT_SIZE, height / VIEWPORT_SIZE)
+        if (contourMode == null) canvas.drawPath(BACKGROUND_PATH, backgroundPaint)
         accentPaths(appearance.customIconPath).forEach { entry ->
             accentPaint.alpha = resolveAlpha((Color.alpha(accentColor) * entry.fillOpacity).roundToInt())
             canvas.drawPath(entry.path, accentPaint)
         }
         canvas.restore()
+    }
+
+    private fun scaledCircle(left: Float, top: Float, width: Float, height: Float): Path {
+        val right = left + width
+        val bottom = top + height
+        if (circleBounds.left != left || circleBounds.top != top ||
+            circleBounds.right != right || circleBounds.bottom != bottom
+        ) {
+            circleBounds.set(left, top, right, bottom)
+            val transform = Matrix().apply {
+                setScale(width / VIEWPORT_SIZE, height / VIEWPORT_SIZE)
+                postTranslate(left, top)
+            }
+            circle = Path().also { BACKGROUND_PATH.transform(transform, it) }
+        }
+        return circle
     }
 
     /**

@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.Paint
 import android.graphics.Path
 import android.net.Uri
 import android.os.Bundle
@@ -102,6 +103,7 @@ import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
 import com.xposed.wetypehook.wetype.graphics.SfSymbols
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
+import com.xposed.wetypehook.wetype.graphics.WeTypeColorOsMaterial
 import com.xposed.wetypehook.wetype.graphics.WeTypeCornerRadii
 import com.xposed.wetypehook.wetype.graphics.createWeTypeContinuousRoundedPath
 import com.xposed.wetypehook.wetype.graphics.createWeTypeContinuousRoundedShape
@@ -635,6 +637,7 @@ private fun WeTypeSettingsScreen(
     var currentModeIsDark by rememberSaveable { mutableStateOf(systemDarkMode) }
     val draft = if (currentModeIsDark) darkDraft else lightDraft
     var disableHotUpdate by rememberSaveable { mutableStateOf(profiles.disableHotUpdate) }
+    val colorOsMaterialSupported = remember { WeTypeColorOsMaterial.isSupported }
     val glassSupported = remember { WeTypeHyperMaterial.areGlassOverridesAvailable() }
     val parsedGlassOverrides = draft.parsedGlassOverrides()
     LaunchedEffect(draft, parsedGlassOverrides) {
@@ -643,14 +646,28 @@ private fun WeTypeSettingsScreen(
         parsedGlassOverrides?.let { draft.previewGlassOverrides = it }
     }
     var hyperMaterialAvailable by remember(preferencesContext) {
-        mutableStateOf(WeTypeHyperMaterial.isAvailable(preferencesContext))
+        mutableStateOf(!colorOsMaterialSupported && WeTypeHyperMaterial.isAvailable(preferencesContext))
     }
-    DisposableEffect(preferencesContext) {
-        val stopObserving = WeTypeHyperMaterial.observeAvailability(preferencesContext) {
-            hyperMaterialAvailable = WeTypeHyperMaterial.isAvailable(preferencesContext)
+    var colorOsEffects by remember(preferencesContext) {
+        mutableStateOf(if (colorOsMaterialSupported) WeTypeColorOsMaterial.readEffects(preferencesContext) else null)
+    }
+    DisposableEffect(preferencesContext, colorOsMaterialSupported) {
+        val stopObserving = if (colorOsMaterialSupported) {
+            WeTypeColorOsMaterial.observeEffects(preferencesContext) {
+                colorOsEffects = WeTypeColorOsMaterial.readEffects(preferencesContext)
+            }
+        } else {
+            WeTypeHyperMaterial.observeAvailability(preferencesContext) {
+                hyperMaterialAvailable = WeTypeHyperMaterial.isAvailable(preferencesContext)
+            }
         }
-        onDispose { stopObserving() }
+        onDispose { stopObserving?.invoke() }
     }
+    val colorOsMaterialAvailable = colorOsEffects?.let { it.blur || it.stroke } == true
+    val activeColorOsEffects = colorOsEffects.takeIf { draft.hyperMaterialEnabled }
+    val colorOsBlurActive = activeColorOsEffects?.blur == true
+    val hyperMaterialEnabled = draft.hyperMaterialEnabled && !colorOsMaterialSupported
+    val customBackgroundEffectsEnabled = !hyperMaterialEnabled && !colorOsBlurActive
 
     fun keyColorGroup(isDark: Boolean) = appearanceGroups.first {
         it.id == if (isDark) DARK_KEY_COLOR_GROUP_ID else LIGHT_KEY_COLOR_GROUP_ID
@@ -773,7 +790,8 @@ private fun WeTypeSettingsScreen(
                 )
                 PreviewSection(
                     glassOverrides = draft.previewGlassOverrides,
-                    hyperMaterialEnabled = draft.hyperMaterialEnabled,
+                    hyperMaterialEnabled = hyperMaterialEnabled,
+                    colorOsEffects = activeColorOsEffects,
                     color = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID),
                     blurRadius = draft.blurRadius,
                     cornerRadius = draft.cornerRadius,
@@ -813,7 +831,7 @@ private fun WeTypeSettingsScreen(
                             title = stringResource(R.string.settings_alpha_title),
                             value = Color.alpha(effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID)),
                             max = 255,
-                            enabled = WeTypeSettings.BACKGROUND_COLOR_ID !in draft.followingColors,
+                            enabled = !colorOsBlurActive && WeTypeSettings.BACKGROUND_COLOR_ID !in draft.followingColors,
                             onValueChange = {
                                 val rgb = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID) and 0xFFFFFF
                                 draft.backgroundColor = (it shl 24) or rgb
@@ -826,6 +844,7 @@ private fun WeTypeSettingsScreen(
                             isDark = currentModeIsDark,
                             followsOtherMode = WeTypeSettings.BACKGROUND_COLOR_ID in draft.followingColors,
                             sourceColor = effectiveColor(WeTypeSettings.BACKGROUND_COLOR_ID, !currentModeIsDark),
+                            enabled = !colorOsBlurActive,
                             onColorChange = { color, following ->
                                 applyColor(WeTypeSettings.BACKGROUND_COLOR_ID, color, following)
                             }
@@ -872,16 +891,23 @@ private fun WeTypeSettingsScreen(
                 ) {
                     Column {
                         MiuixSwitchWidget(
-                            title = stringResource(R.string.settings_hyper_material_title),
+                            title = stringResource(
+                                if (colorOsMaterialSupported) R.string.settings_coloros_material_title
+                                else R.string.settings_hyper_material_title
+                            ),
                             description = stringResource(
-                                if (hyperMaterialAvailable) R.string.settings_hyper_material_desc
-                                else R.string.settings_hyper_material_unavailable
+                                when {
+                                    colorOsMaterialAvailable -> R.string.settings_coloros_material_desc
+                                    colorOsMaterialSupported -> R.string.settings_coloros_material_unavailable
+                                    hyperMaterialAvailable -> R.string.settings_hyper_material_desc
+                                    else -> R.string.settings_hyper_material_unavailable
+                                }
                             ),
                             checked = draft.hyperMaterialEnabled,
-                            enabled = hyperMaterialAvailable,
+                            enabled = if (colorOsMaterialSupported) colorOsMaterialAvailable else hyperMaterialAvailable,
                             onCheckedChange = { draft.hyperMaterialEnabled = it }
                         )
-                        if (draft.hyperMaterialEnabled) {
+                        if (hyperMaterialEnabled) {
                             HorizontalDivider()
                             GlassOverrideEditor(
                                 values = draft.glassInput,
@@ -895,7 +921,7 @@ private fun WeTypeSettingsScreen(
                         }
                         HorizontalDivider()
                         MiuixSwitchWidget(
-                            enabled = !draft.hyperMaterialEnabled,
+                            enabled = customBackgroundEffectsEnabled,
                             title = stringResource(R.string.settings_edge_highlight_title),
                             description = stringResource(R.string.settings_edge_highlight_desc),
                             checked = draft.edgeHighlightEnabled,
@@ -905,7 +931,7 @@ private fun WeTypeSettingsScreen(
                         if (draft.edgeHighlightEnabled) {
                             SliderPreferenceItem(
                                 title = stringResource(R.string.settings_edge_highlight_intensity_title),
-                                enabled = !draft.hyperMaterialEnabled,
+                                enabled = customBackgroundEffectsEnabled,
                                 value = draft.edgeHighlightIntensity,
                                 max = 200,
                                 onValueChange = { draft.edgeHighlightIntensity = it }
@@ -917,7 +943,7 @@ private fun WeTypeSettingsScreen(
                         // 模糊滑块
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_blur_title),
-                            enabled = !draft.hyperMaterialEnabled,
+                            enabled = customBackgroundEffectsEnabled,
                             value = draft.blurRadius,
                             max = 100,
                             onValueChange = { draft.blurRadius = it }
@@ -1114,6 +1140,7 @@ private fun ModuleActivationTag(
 private fun PreviewSection(
     glassOverrides: GlassMaterialOverrides,
     hyperMaterialEnabled: Boolean,
+    colorOsEffects: WeTypeColorOsMaterial.Effects?,
     color: Int,
     blurRadius: Int,
     cornerRadius: Int,
@@ -1147,6 +1174,7 @@ private fun PreviewSection(
                     PreviewCard(
                         glassOverrides = glassOverrides,
                         hyperMaterialEnabled = hyperMaterialEnabled,
+                        colorOsEffects = colorOsEffects,
                         color = color,
                         blurRadius = blurRadius,
                         cornerRadius = cornerRadius,
@@ -1167,6 +1195,7 @@ private fun PreviewSection(
 private fun PreviewCard(
     glassOverrides: GlassMaterialOverrides,
     hyperMaterialEnabled: Boolean,
+    colorOsEffects: WeTypeColorOsMaterial.Effects?,
     color: Int,
     blurRadius: Int,
     cornerRadius: Int,
@@ -1178,7 +1207,19 @@ private fun PreviewCard(
     isDark: Boolean
 ) {
     val context = LocalContext.current
-    val displayColor = if (hyperMaterialEnabled && glassOverrides.glass == null) WeTypeHyperMaterial.fallbackColor(isDark) else color
+    val colorOsBlurActive = colorOsEffects?.blur == true
+    val colorOsStrokeActive = colorOsEffects?.stroke == true
+    val displayColor = when {
+        colorOsBlurActive -> WeTypeColorOsMaterial.backgroundTint(isDark)
+        hyperMaterialEnabled && glassOverrides.glass == null -> WeTypeHyperMaterial.fallbackColor(isDark)
+        else -> color
+    }
+    val systemBackgroundActive = hyperMaterialEnabled || colorOsBlurActive
+    val previewBlur = if (colorOsBlurActive) {
+        with(LocalDensity.current) { WeTypeColorOsMaterial.BACKGROUND_BLUR_RADIUS.toDp() }
+    } else {
+        (blurRadius / 3f).coerceAtLeast(0f).dp
+    }
     val keyboardFontFamily = remember(context) {
         val hostAssets = runCatching {
             val application = context.applicationContext
@@ -1197,14 +1238,31 @@ private fun PreviewCard(
         bottomEnd = CornerSize(0.dp),
         bottomStart = CornerSize(0.dp)
     )
-    val previewKeyColor = if (isDark) darkKeyColor else lightKeyColor
+    val keyColor = if (isDark) darkKeyColor else lightKeyColor
+    val previewKeyColor = if (colorOsStrokeActive) WeTypeColorOsMaterial.keyFill(isDark, keyColor) else keyColor
     val previewKeyWidth = 32.dp
     val previewKeyHeight = previewKeyWidth * (130f / 92f)
     // Scale the host's key geometry and corner radius together from its 92-unit key width.
-    val previewKeyShape = remember(keyCornerRadius) {
-        createWeTypeContinuousRoundedShape(
-            CornerSize(previewKeyWidth * (WeTypeSettings.keyCornerRadiusToHostUnits(keyCornerRadius) / 92f))
-        )
+    val previewKeyRadius = previewKeyWidth * (WeTypeSettings.keyCornerRadiusToHostUnits(keyCornerRadius) / 92f)
+    val previewKeyBackground = if (colorOsStrokeActive) {
+        val contour = remember { WeTypeColorOsMaterial.KeyContour() }
+        Modifier.drawWithCache {
+            val radius = previewKeyRadius.toPx()
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = previewKeyColor }
+            val path = createWeTypeContinuousRoundedPath(size.width, size.height, radius)
+            onDrawBehind {
+                drawIntoCanvas { canvas ->
+                    val target = canvas.nativeCanvas
+                    target.drawPath(path, paint)
+                    if (paint.alpha != 0) {
+                        contour.draw(target, path, 0f, 0f, size.width, size.height, isDark)
+                    }
+                }
+            }
+        }
+    } else {
+        val shape = remember(previewKeyRadius) { createWeTypeContinuousRoundedShape(CornerSize(previewKeyRadius)) }
+        Modifier.clip(shape).background(ComposeColor(previewKeyColor))
     }
     Column(
         modifier = Modifier
@@ -1222,7 +1280,7 @@ private fun PreviewCard(
                     .weTypePreviewBloom(
                         color = color,
                         cornerRadius = previewCorner,
-                        edgeHighlightEnabled = edgeHighlightEnabled && !hyperMaterialEnabled,
+                        edgeHighlightEnabled = edgeHighlightEnabled && !systemBackgroundActive,
                         edgeHighlightIntensity = edgeHighlightIntensity,
                         isDark = isDark
                     )
@@ -1243,12 +1301,12 @@ private fun PreviewCard(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .matchParentSize()
-                            .blur((blurRadius / 3f).coerceAtLeast(0f).dp)
+                            .blur(previewBlur)
                     )
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .background(ComposeColor(color))
+                            .background(ComposeColor(displayColor))
                     )
                 }
                 Row(
@@ -1273,13 +1331,12 @@ private fun PreviewCard(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(previewKeyHeight)
-                                    .clip(previewKeyShape)
-                                    .background(ComposeColor(previewKeyColor))
+                                    .then(previewKeyBackground)
                                     .padding(horizontal = 14.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = if (hyperMaterialEnabled) stringResource(R.string.settings_hyper_material_preview) else formatArgb(color),
+                                    text = if (systemBackgroundActive) stringResource(R.string.settings_hyper_material_preview) else formatArgb(color),
                                     color = previewTextColor(displayColor),
                                     style = MiuixTheme.textStyles.headline1,
                                     maxLines = 1,
@@ -1292,8 +1349,7 @@ private fun PreviewCard(
                                 Box(
                                     modifier = Modifier
                                         .size(width = previewKeyWidth, height = previewKeyHeight)
-                                        .clip(previewKeyShape)
-                                        .background(ComposeColor(previewKeyColor)),
+                                        .then(previewKeyBackground),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -1307,7 +1363,7 @@ private fun PreviewCard(
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = if (hyperMaterialEnabled) {
+                            text = if (systemBackgroundActive) {
                                 "${stringResource(R.string.settings_corner_label)} $cornerRadius"
                             } else {
                                 "${stringResource(R.string.settings_blur_label)} $blurRadius · ${stringResource(R.string.settings_corner_label)} $cornerRadius"
@@ -1766,6 +1822,7 @@ private fun ColorPreferenceItem(
     isDark: Boolean,
     followsOtherMode: Boolean,
     sourceColor: Int,
+    enabled: Boolean = true,
     onColorChange: (Int, Boolean) -> Unit
 ) {
     var showDialog by rememberSaveable { mutableStateOf(false) }
@@ -1786,6 +1843,7 @@ private fun ColorPreferenceItem(
 
     ArrowPreference(
         title = title,
+        enabled = enabled,
         summary = if (followsOtherMode) {
             stringResource(R.string.settings_color_follow_summary, formatArgb(color), followTitle)
         } else {

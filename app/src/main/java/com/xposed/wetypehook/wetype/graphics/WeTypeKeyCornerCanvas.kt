@@ -10,9 +10,16 @@ import android.graphics.RectF
 /** Used only for the host's background passes, never as a View's general drawing canvas. */
 internal class WeTypeKeyCornerCanvas : Canvas() {
     var target: Canvas? = null
+    var backgroundPaint: Paint? = null
     var shadowPaint: Paint? = null
     var borderPaint: Paint? = null
+    var colorOsDarkMode: Boolean? = null
+    private val materialFill = Paint()
+    private val contour by lazy(LazyThreadSafetyMode.NONE) { WeTypeColorOsMaterial.KeyContour() }
     private val paths = PositionedPathCache()
+    private var contourPath: Path? = null
+    private val contourBounds = RectF()
+    private var contourPathAtOrigin = false
 
     override fun drawRoundRect(rect: RectF, rx: Float, ry: Float, paint: Paint) {
         drawRoundRect(rect.left, rect.top, rect.right, rect.bottom, rx, ry, paint)
@@ -37,19 +44,53 @@ internal class WeTypeKeyCornerCanvas : Canvas() {
             canvas.drawRoundRect(left, top, right, bottom, rx, ry, paint)
             return
         }
+        val darkMode = colorOsDarkMode?.takeIf { paint === backgroundPaint && paint.alpha != 0 }
+        val fill = if (darkMode == null) paint else materialFill.apply {
+            set(paint)
+            color = WeTypeColorOsMaterial.keyFill(darkMode, paint.color)
+        }
         val positionedPath = paths.getOrNull(left, top, width, height, rx)
+        val path = positionedPath ?: paths.getGeometry(width, height, rx)
+        if (darkMode != null) {
+            contourPath = path
+            contourBounds.set(left, top, right, bottom)
+            contourPathAtOrigin = positionedPath == null
+        }
         if (positionedPath != null) {
-            canvas.drawPath(positionedPath, paint)
+            canvas.drawPath(positionedPath, fill)
             return
         }
-        val path = paths.getGeometry(width, height, rx)
         val checkpoint = canvas.save()
         try {
             canvas.translate(left, top)
-            canvas.drawPath(path, paint)
+            canvas.drawPath(path, fill)
         } finally {
             canvas.restoreToCount(checkpoint)
         }
+    }
+
+    /** The host's pressed fill can be opaque, so draw the rim after the full background pass. */
+    fun drawPendingContour() {
+        val path = contourPath ?: return
+        clearPendingContour()
+        val canvas = checkNotNull(target)
+        val darkMode = checkNotNull(colorOsDarkMode)
+        val bounds = contourBounds
+        if (!contourPathAtOrigin) {
+            contour.draw(canvas, path, bounds.left, bounds.top, bounds.width(), bounds.height(), darkMode)
+            return
+        }
+        val checkpoint = canvas.save()
+        try {
+            canvas.translate(bounds.left, bounds.top)
+            contour.draw(canvas, path, 0f, 0f, bounds.width(), bounds.height(), darkMode)
+        } finally {
+            canvas.restoreToCount(checkpoint)
+        }
+    }
+
+    fun clearPendingContour() {
+        contourPath = null
     }
 
     // Canvas queries this virtual method from its constructor, before a target can be attached.

@@ -122,18 +122,23 @@ internal object WeTypeKeyboardCorners {
             val paints = backgroundPaints.get(chain.thisObject!!)
             state.busy = true
             state.corners.target = canvas
-            state.corners.shadowPaint = paints.first
-            state.corners.borderPaint = paints.second
+            state.corners.backgroundPaint = paints.background
+            state.corners.shadowPaint = paints.shadow
+            state.corners.borderPaint = paints.border
+            state.corners.colorOsDarkMode = WeTypeWindowHooks.colorOsKeyMaterialDarkMode
             state.arguments[0] = state.corners
             state.arguments[1] = button
             try {
-                chain.proceed(state.arguments)
+                chain.proceed(state.arguments).also { state.corners.drawPendingContour() }
             } finally {
                 state.arguments[0] = null
                 state.arguments[1] = null
                 state.corners.target = null
+                state.corners.backgroundPaint = null
                 state.corners.shadowPaint = null
                 state.corners.borderPaint = null
+                state.corners.colorOsDarkMode = null
+                state.corners.clearPendingContour()
                 state.busy = false
             }
         }
@@ -163,14 +168,18 @@ internal object WeTypeKeyboardCorners {
         val alpha = AlphaBitmapAccess(type, abstractDrawer, keyboard, buttonType, prepareText)
         HookEnvironment.registerHook(factory, "alpha-bitmap") { chain ->
             val button = chain.args.getOrNull(1) ?: return@registerHook chain.proceed()
+            val drawer = chain.thisObject ?: return@registerHook chain.proceed()
             val state = renderState()
             if (state.busy) return@registerHook chain.proceed()
             state.busy = true
             val bitmap = try {
-                alpha.draw(chain.thisObject!!, button, state)
+                alpha.draw(drawer, button, state)
             } finally {
                 state.bitmapCanvas.setBitmap(null)
                 state.corners.target = null
+                state.corners.backgroundPaint = null
+                state.corners.colorOsDarkMode = null
+                state.corners.clearPendingContour()
                 state.busy = false
             }
             bitmap ?: chain.proceed()
@@ -189,14 +198,23 @@ internal object WeTypeKeyboardCorners {
         type: Class<*>,
         properties: Map<String, WeTypeKeyboardSymbols.PropertySignature>
     ) {
+        private val background = field(type, properties, "bgPaint", Paint::class.java)
         private val shadow = field(type, properties, "shadowPaint", Paint::class.java)
         private val border = field(type, properties, "borderPaint", Paint::class.java)
-        private val paints = WeakHashMap<Any, Pair<Paint, Paint>>()
+        private val paints = WeakHashMap<Any, BackgroundPaints>()
 
-        fun get(drawer: Any): Pair<Paint, Paint> = synchronized(paints) {
-            paints.getOrPut(drawer) { (shadow.get(drawer) as Paint) to (border.get(drawer) as Paint) }
+        fun get(drawer: Any): BackgroundPaints = synchronized(paints) {
+            paints.getOrPut(drawer) {
+                BackgroundPaints(
+                    background.get(drawer) as Paint,
+                    shadow.get(drawer) as Paint,
+                    border.get(drawer) as Paint
+                )
+            }
         }
     }
+
+    private data class BackgroundPaints(val background: Paint, val shadow: Paint, val border: Paint)
 
     private class AlphaBitmapAccess(
         type: Class<*>,
@@ -249,7 +267,10 @@ internal object WeTypeKeyboardCorners {
                 if (backgroundTint != 0) {
                     paint.style = Paint.Style.FILL
                     paint.color = backgroundTint
+                    canvas.backgroundPaint = paint
+                    canvas.colorOsDarkMode = WeTypeWindowHooks.colorOsKeyMaterialDarkMode
                     canvas.drawRoundRect(0f, 0f, width.toFloat(), contentHeight, radius, radius, paint)
+                    canvas.backgroundPaint = null
                 }
                 val pressedTint = pressColor.getInt(button)
                 if (pressedTint != 0 && status.get(button) == "press") {
@@ -257,6 +278,7 @@ internal object WeTypeKeyboardCorners {
                     paint.color = pressedTint
                     canvas.drawRoundRect(0f, 0f, width.toFloat(), contentHeight, radius, radius, paint)
                 }
+                canvas.drawPendingContour()
                 if (contentVisible.getBoolean(button)) {
                     val mode = upperMode.getInt(keyboard)
                     // The host treats modes 1 and 5 as lowercase; all other modes use uppercase sizing.
@@ -275,6 +297,7 @@ internal object WeTypeKeyboardCorners {
                 throw failure
             }
         }
+
     }
 
     private fun properties(type: Class<*>): Map<String, WeTypeKeyboardSymbols.PropertySignature> {
